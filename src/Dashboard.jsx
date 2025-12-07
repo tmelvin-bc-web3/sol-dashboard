@@ -188,10 +188,10 @@ const analyzeVolume = (data, period = 20) => {
 };
 
 // ============ SIGNAL ANALYSIS ============
-const analyzeSignals = (data, funding = 0, oi = 0, oiChange = 0, btcBias = 'NEUTRAL') => {
+const analyzeSignals = (data, funding = 0, oi = 0, oiChange = 0, refBias = 'NEUTRAL') => {
   if (data.length < 50) return { bias: 'NEUTRAL', confidence: 0, signals: [], breakdown: {}, indicators: {}, tradePlan: null, score: 0, entryQuality: 'NONE' };
   
-  const latest = data[data.length - 1], prev = data[data.length - 2], prev2 = data[data.length - 3];
+  const latest = data[data.length - 1], prev = data[data.length - 2];
   const ema9 = calcEMA(data, 9), ema21 = calcEMA(data, 21), ema50 = calcEMA(data, 50);
   const rsi = calcRSI(data), stochRSI = calcStochRSI(data);
   const { macd, signal: macdSig, histogram } = calcMACD(data);
@@ -235,7 +235,6 @@ const analyzeSignals = (data, funding = 0, oi = 0, oiChange = 0, btcBias = 'NEUT
   // MOMENTUM
   const lRSI = rsi[rsi.length - 1], lStochK = stochRSI.k[stochRSI.k.length - 1];
   const lMACD = macd[macd.length - 1], lSig = macdSig[macdSig.length - 1];
-  const lHist = histogram[histogram.length - 1], pHist = histogram[histogram.length - 2];
   
   if (lRSI < 30) { bullScore += 10; breakdown.momentum.score += 10; breakdown.momentum.signals.push({ type: 'bullish', text: `RSI oversold ${lRSI.toFixed(0)}` }); }
   else if (lRSI > 70) { bearScore += 10; breakdown.momentum.score -= 10; breakdown.momentum.signals.push({ type: 'bearish', text: `RSI overbought ${lRSI.toFixed(0)}` }); }
@@ -278,10 +277,10 @@ const analyzeSignals = (data, funding = 0, oi = 0, oiChange = 0, btcBias = 'NEUT
   if (volume.trend === 'bullish') { bullScore += 6; breakdown.volume.score += 6; breakdown.volume.signals.push({ type: 'bullish', text: 'Vol favors bulls' }); }
   else if (volume.trend === 'bearish') { bearScore += 6; breakdown.volume.score -= 6; breakdown.volume.signals.push({ type: 'bearish', text: 'Vol favors bears' }); }
   
-  // CONFLUENCE
-  if (btcBias === 'LONG') { bullScore += 8; breakdown.confluence.score += 8; breakdown.confluence.signals.push({ type: 'bullish', text: 'BTC bullish ✓' }); }
-  else if (btcBias === 'SHORT') { bearScore += 8; breakdown.confluence.score -= 8; breakdown.confluence.signals.push({ type: 'bearish', text: 'BTC bearish ✓' }); }
-  else { breakdown.confluence.signals.push({ type: 'neutral', text: 'BTC neutral' }); }
+  // CONFLUENCE (reference asset for SOL = BTC, for BTC = ETH)
+  if (refBias === 'LONG') { bullScore += 8; breakdown.confluence.score += 8; breakdown.confluence.signals.push({ type: 'bullish', text: 'Ref asset bullish ✓' }); }
+  else if (refBias === 'SHORT') { bearScore += 8; breakdown.confluence.score -= 8; breakdown.confluence.signals.push({ type: 'bearish', text: 'Ref asset bearish ✓' }); }
+  else { breakdown.confluence.signals.push({ type: 'neutral', text: 'Ref asset neutral' }); }
   
   const fundingPct = funding * 100;
   if (fundingPct > 0.03) { bearScore += 8; breakdown.confluence.score -= 8; breakdown.confluence.signals.push({ type: 'bearish', text: `High funding ${fundingPct.toFixed(3)}%` }); }
@@ -294,21 +293,14 @@ const analyzeSignals = (data, funding = 0, oi = 0, oiChange = 0, btcBias = 'NEUT
   if (totalScore >= 10) bias = 'LONG'; 
   else if (totalScore <= -10) bias = 'SHORT';
   
-  // ============ ENTRY QUALITY SCORING ============
+  // Entry quality
   let entryQuality = 'NONE';
   let qualityReasons = [];
-  
   const lATR = atr[atr.length - 1];
-  
-  // Check for pullback to EMA (better entry)
   const nearEma9 = Math.abs(latest.close - le9) < lATR * 0.5;
   const nearEma21 = Math.abs(latest.close - le21) < lATR * 0.7;
-  
-  // Candle confirmation
   const bullishCandle = latest.close > latest.open && latest.close > prev.close;
   const bearishCandle = latest.close < latest.open && latest.close < prev.close;
-  
-  // Wick rejection
   const bullishWick = (latest.open - latest.low) > (latest.high - latest.open) * 1.5 && latest.close > latest.open;
   const bearishWick = (latest.high - latest.open) > (latest.open - latest.low) * 1.5 && latest.close < latest.open;
   
@@ -319,10 +311,9 @@ const analyzeSignals = (data, funding = 0, oi = 0, oiChange = 0, btcBias = 'NEUT
     if (bullishWick) { qualityScore += 2; qualityReasons.push('Rejection wick'); }
     if (lADX > 20) { qualityScore += 1; qualityReasons.push('Trending'); }
     if (volume.relative > 1.0) { qualityScore += 1; qualityReasons.push('Volume OK'); }
-    if (btcBias === 'LONG') { qualityScore += 2; qualityReasons.push('BTC aligned'); }
+    if (refBias === 'LONG') { qualityScore += 2; qualityReasons.push('Ref aligned'); }
     if (structure.structure === 'uptrend') { qualityScore += 1; qualityReasons.push('Structure OK'); }
     if (divergence.bullish) { qualityScore += 2; qualityReasons.push('Divergence!'); }
-    
     if (qualityScore >= 8) entryQuality = 'A+';
     else if (qualityScore >= 6) entryQuality = 'A';
     else if (qualityScore >= 4) entryQuality = 'B';
@@ -334,25 +325,22 @@ const analyzeSignals = (data, funding = 0, oi = 0, oiChange = 0, btcBias = 'NEUT
     if (bearishWick) { qualityScore += 2; qualityReasons.push('Rejection wick'); }
     if (lADX > 20) { qualityScore += 1; qualityReasons.push('Trending'); }
     if (volume.relative > 1.0) { qualityScore += 1; qualityReasons.push('Volume OK'); }
-    if (btcBias === 'SHORT') { qualityScore += 2; qualityReasons.push('BTC aligned'); }
+    if (refBias === 'SHORT') { qualityScore += 2; qualityReasons.push('Ref aligned'); }
     if (structure.structure === 'downtrend') { qualityScore += 1; qualityReasons.push('Structure OK'); }
     if (divergence.bearish) { qualityScore += 2; qualityReasons.push('Divergence!'); }
-    
     if (qualityScore >= 8) entryQuality = 'A+';
     else if (qualityScore >= 6) entryQuality = 'A';
     else if (qualityScore >= 4) entryQuality = 'B';
     else if (qualityScore >= 2) entryQuality = 'C';
   }
   
-  // Trade filters
   let shouldTrade = true;
   let noTradeReason = '';
-  if (lADX < 18) { shouldTrade = false; noTradeReason = 'ADX too low (no trend)'; }
+  if (lADX < 18) { shouldTrade = false; noTradeReason = 'ADX too low'; }
   if (lBB.width < 0.012) { shouldTrade = false; noTradeReason = 'BB squeeze'; }
   if (volume.relative < 0.6) { shouldTrade = false; noTradeReason = 'Volume too low'; }
-  if (entryQuality === 'C' || entryQuality === 'NONE') { shouldTrade = false; noTradeReason = 'Entry quality too low'; }
+  if (entryQuality === 'C' || entryQuality === 'NONE') { shouldTrade = false; noTradeReason = 'Entry quality low'; }
   
-  // Trade plan
   let tradePlan = null;
   if (bias !== 'NEUTRAL') {
     const price = latest.close;
@@ -361,36 +349,22 @@ const analyzeSignals = (data, funding = 0, oi = 0, oiChange = 0, btcBias = 'NEUT
       const pullbackEntry = Math.min(le9, price - lATR * 0.3);
       const stopLoss = Math.min(latest.low - lATR * 0.5, le21 - lATR * 0.3);
       const risk = entry - stopLoss;
-      tradePlan = {
-        direction: 'LONG', entry: { aggressive: entry, pullback: pullbackEntry }, stopLoss,
-        targets: [entry + risk * 1.5, entry + risk * 2.5, entry + risk * 4],
-        riskReward: '2.5', riskPercent: ((risk / entry) * 100).toFixed(2), atr: lATR
-      };
+      tradePlan = { direction: 'LONG', entry: { aggressive: entry, pullback: pullbackEntry }, stopLoss, targets: [entry + risk * 1.5, entry + risk * 2.5, entry + risk * 4], riskPercent: ((risk / entry) * 100).toFixed(2), atr: lATR };
     } else {
       const entry = price;
       const pullbackEntry = Math.max(le9, price + lATR * 0.3);
       const stopLoss = Math.max(latest.high + lATR * 0.5, le21 + lATR * 0.3);
       const risk = stopLoss - entry;
-      tradePlan = {
-        direction: 'SHORT', entry: { aggressive: entry, pullback: pullbackEntry }, stopLoss,
-        targets: [entry - risk * 1.5, entry - risk * 2.5, entry - risk * 4],
-        riskReward: '2.5', riskPercent: ((risk / entry) * 100).toFixed(2), atr: lATR
-      };
+      tradePlan = { direction: 'SHORT', entry: { aggressive: entry, pullback: pullbackEntry }, stopLoss, targets: [entry - risk * 1.5, entry - risk * 2.5, entry - risk * 4], riskPercent: ((risk / entry) * 100).toFixed(2), atr: lATR };
     }
   }
   
-  return { 
-    bias, confidence: Math.min(Math.abs(totalScore) * 1.5, 100).toFixed(0), 
-    bullScore, bearScore, signals, breakdown, shouldTrade, noTradeReason, tradePlan, score: totalScore,
-    divergence, structure: structure.structure, volume, entryQuality, qualityReasons,
-    indicators: { rsi: lRSI, stochK: lStochK, macd: lMACD, macdSignal: lSig, adx: lADX, atr: lATR, bbWidth: lBB.width * 100, price: latest.close } 
-  };
+  return { bias, confidence: Math.min(Math.abs(totalScore) * 1.5, 100).toFixed(0), bullScore, bearScore, signals, breakdown, shouldTrade, noTradeReason, tradePlan, score: totalScore, divergence, structure: structure.structure, volume, entryQuality, qualityReasons, indicators: { rsi: lRSI, stochK: lStochK, macd: lMACD, macdSignal: lSig, adx: lADX, atr: lATR, bbWidth: lBB.width * 100, price: latest.close } };
 };
 
-// ============ HIGH WIN RATE BACKTESTING ============
+// ============ BACKTESTING ============
 const runBacktest = (data, otherTfData = null, initialCapital = 10000) => {
   if (data.length < 100) return null;
-  
   const trades = [];
   let position = null;
   let capital = initialCapital;
@@ -401,8 +375,6 @@ const runBacktest = (data, otherTfData = null, initialCapital = 10000) => {
   for (let i = 60; i < data.length - 1; i++) {
     const slice = data.slice(0, i + 1);
     const analysis = analyzeSignals(slice, 0, 0, 0, 'NEUTRAL');
-    
-    // Get other timeframe analysis for MTF confluence
     let otherTfBias = 'NEUTRAL';
     if (otherTfData && otherTfData.length > i) {
       const otherSlice = otherTfData.slice(0, Math.min(i * 5, otherTfData.length));
@@ -411,36 +383,24 @@ const runBacktest = (data, otherTfData = null, initialCapital = 10000) => {
         otherTfBias = otherAnalysis.bias;
       }
     }
-    
     const currentCandle = data[i];
     const nextCandle = data[i + 1];
-    const lATR = analysis.indicators.atr;
     
-    // Exit logic
     if (position) {
       let exitPrice = null;
       let exitReason = '';
-      
       if (position.direction === 'LONG') {
-        if (nextCandle.low <= position.stopLoss) { exitPrice = position.stopLoss; exitReason = 'Stop Loss'; }
+        if (nextCandle.low <= position.stopLoss) { exitPrice = position.stopLoss; exitReason = 'Stop'; }
         else if (nextCandle.high >= position.tp2) { exitPrice = position.tp2; exitReason = 'TP2'; }
-        else if (nextCandle.high >= position.tp1 && !position.tp1Hit) { 
-          position.tp1Hit = true; 
-          position.stopLoss = position.entry + (position.entry - position.originalStop) * 0.2; // Move stop to +0.2R
-        }
-        else if (analysis.bias === 'SHORT' && analysis.score <= -18) { exitPrice = nextCandle.open; exitReason = 'Signal Flip'; }
+        else if (nextCandle.high >= position.tp1 && !position.tp1Hit) { position.tp1Hit = true; position.stopLoss = position.entry + (position.entry - position.originalStop) * 0.2; }
+        else if (analysis.bias === 'SHORT' && analysis.score <= -18) { exitPrice = nextCandle.open; exitReason = 'Flip'; }
       } else {
-        if (nextCandle.high >= position.stopLoss) { exitPrice = position.stopLoss; exitReason = 'Stop Loss'; }
+        if (nextCandle.high >= position.stopLoss) { exitPrice = position.stopLoss; exitReason = 'Stop'; }
         else if (nextCandle.low <= position.tp2) { exitPrice = position.tp2; exitReason = 'TP2'; }
-        else if (nextCandle.low <= position.tp1 && !position.tp1Hit) { 
-          position.tp1Hit = true; 
-          position.stopLoss = position.entry - (position.originalStop - position.entry) * 0.2;
-        }
-        else if (analysis.bias === 'LONG' && analysis.score >= 18) { exitPrice = nextCandle.open; exitReason = 'Signal Flip'; }
+        else if (nextCandle.low <= position.tp1 && !position.tp1Hit) { position.tp1Hit = true; position.stopLoss = position.entry - (position.originalStop - position.entry) * 0.2; }
+        else if (analysis.bias === 'LONG' && analysis.score >= 18) { exitPrice = nextCandle.open; exitReason = 'Flip'; }
       }
-      
-      if (!exitPrice && i - position.entryIndex > 25) { exitPrice = nextCandle.close; exitReason = 'Time Exit'; }
-      
+      if (!exitPrice && i - position.entryIndex > 25) { exitPrice = nextCandle.close; exitReason = 'Time'; }
       if (exitPrice) {
         const pnl = position.direction === 'LONG' ? (exitPrice - position.entry) * position.size : (position.entry - exitPrice) * position.size;
         const riskAmount = Math.abs(position.entry - position.originalStop) * position.size;
@@ -448,49 +408,22 @@ const runBacktest = (data, otherTfData = null, initialCapital = 10000) => {
         capital += pnl;
         maxCapital = Math.max(maxCapital, capital);
         maxDrawdown = Math.max(maxDrawdown, ((maxCapital - capital) / maxCapital) * 100);
-        trades.push({ direction: position.direction, entry: position.entry, exit: exitPrice, pnl, pnlPercent: rMultiple, reason: exitReason, duration: i - position.entryIndex, quality: position.quality });
+        trades.push({ direction: position.direction, entry: position.entry, exit: exitPrice, pnl, pnlPercent: rMultiple, reason: exitReason, quality: position.quality });
         position = null;
       }
     }
     
-    // STRICT ENTRY CRITERIA FOR HIGH WIN RATE
     if (!position && analysis.tradePlan) {
-      const validEntry = 
-        analysis.shouldTrade &&
-        Math.abs(analysis.score) >= 18 &&                    // High conviction
-        (analysis.entryQuality === 'A+' || analysis.entryQuality === 'A') && // Good entry quality
-        analysis.volume.relative >= 1.0 &&                   // Volume confirmation
-        analysis.indicators.adx >= 20;                       // Trending market
-      
-      // MTF filter - skip if other TF disagrees
+      const validEntry = analysis.shouldTrade && Math.abs(analysis.score) >= 18 && (analysis.entryQuality === 'A+' || analysis.entryQuality === 'A') && analysis.volume.relative >= 1.0 && analysis.indicators.adx >= 20;
       const mtfAligned = otherTfBias === 'NEUTRAL' || otherTfBias === analysis.bias;
-      
-      // Candle confirmation
-      const candleConfirm = analysis.bias === 'LONG' 
-        ? (currentCandle.close > currentCandle.open) 
-        : (currentCandle.close < currentCandle.open);
-      
+      const candleConfirm = analysis.bias === 'LONG' ? (currentCandle.close > currentCandle.open) : (currentCandle.close < currentCandle.open);
       if (validEntry && mtfAligned && candleConfirm) {
         const plan = analysis.tradePlan;
         const riskPerTrade = capital * 0.01;
         const stopDistance = Math.abs(currentCandle.close - plan.stopLoss);
         const positionSize = riskPerTrade / stopDistance;
-        
-        position = {
-          direction: plan.direction, 
-          entry: currentCandle.close, 
-          stopLoss: plan.stopLoss, 
-          originalStop: plan.stopLoss,
-          tp1: plan.targets[0], 
-          tp2: plan.targets[1], 
-          tp1Hit: false, 
-          entryIndex: i, 
-          size: positionSize,
-          quality: analysis.entryQuality
-        };
-      } else if (analysis.shouldTrade && Math.abs(analysis.score) >= 12) {
-        skippedTrades++;
-      }
+        position = { direction: plan.direction, entry: currentCandle.close, stopLoss: plan.stopLoss, originalStop: plan.stopLoss, tp1: plan.targets[0], tp2: plan.targets[1], tp1Hit: false, entryIndex: i, size: positionSize, quality: analysis.entryQuality };
+      } else if (analysis.shouldTrade && Math.abs(analysis.score) >= 12) { skippedTrades++; }
     }
   }
   
@@ -498,7 +431,7 @@ const runBacktest = (data, otherTfData = null, initialCapital = 10000) => {
     const lastPrice = data[data.length - 1].close;
     const pnl = position.direction === 'LONG' ? (lastPrice - position.entry) * position.size : (position.entry - lastPrice) * position.size;
     const riskAmount = Math.abs(position.entry - position.originalStop) * position.size;
-    trades.push({ direction: position.direction, entry: position.entry, exit: lastPrice, pnl, pnlPercent: pnl / riskAmount, reason: 'End', duration: data.length - position.entryIndex, quality: position.quality });
+    trades.push({ direction: position.direction, entry: position.entry, exit: lastPrice, pnl, pnlPercent: pnl / riskAmount, reason: 'End', quality: position.quality });
     capital += pnl;
   }
   
@@ -507,10 +440,7 @@ const runBacktest = (data, otherTfData = null, initialCapital = 10000) => {
   const totalLosses = Math.abs(losses.reduce((a, t) => a + t.pnl, 0));
   
   return {
-    totalTrades: trades.length, 
-    winningTrades: wins.length, 
-    losingTrades: losses.length,
-    skippedTrades,
+    totalTrades: trades.length, winningTrades: wins.length, losingTrades: losses.length, skippedTrades,
     winRate: trades.length > 0 ? ((wins.length / trades.length) * 100).toFixed(1) : 0,
     avgWin: wins.length > 0 ? (wins.reduce((a, t) => a + t.pnlPercent, 0) / wins.length).toFixed(2) : 0,
     avgLoss: losses.length > 0 ? (losses.reduce((a, t) => a + t.pnlPercent, 0) / losses.length).toFixed(2) : 0,
@@ -541,82 +471,25 @@ const SignalBox = ({ analysis, timeframe }) => (
     <div style={{ fontSize: '24px', fontWeight: '700', color: analysis.bias === 'LONG' ? '#10b981' : analysis.bias === 'SHORT' ? '#ef4444' : '#666' }}>{analysis.bias}</div>
     <div style={{ fontSize: '9px', color: '#666', marginTop: '2px' }}>{analysis.score > 0 ? '+' : ''}{analysis.score} pts</div>
     {analysis.entryQuality && analysis.entryQuality !== 'NONE' && (
-      <div style={{ marginTop: '4px', background: analysis.entryQuality === 'A+' ? '#10b981' : analysis.entryQuality === 'A' ? '#3b82f6' : '#f59e0b', color: '#000', padding: '2px 6px', fontSize: '9px', fontWeight: '700', display: 'inline-block' }}>
-        {analysis.entryQuality}
-      </div>
+      <div style={{ marginTop: '4px', background: analysis.entryQuality === 'A+' ? '#10b981' : analysis.entryQuality === 'A' ? '#3b82f6' : '#f59e0b', color: '#000', padding: '2px 6px', fontSize: '9px', fontWeight: '700', display: 'inline-block' }}>{analysis.entryQuality}</div>
     )}
   </div>
 );
 
-// ============ MAIN DASHBOARD ============
-export default function Dashboard() {
-  const [data5m, setData5m] = useState([]);
-  const [data1m, setData1m] = useState([]);
-  const [dataBtc, setDataBtc] = useState([]);
-  const [price, setPrice] = useState(null);
-  const [priceChange, setPriceChange] = useState(0);
-  const [update, setUpdate] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [funding, setFunding] = useState(0);
-  const [oi, setOi] = useState(0);
-  const [oiChange, setOiChange] = useState(0);
-  const [prevOi, setPrevOi] = useState(0);
+// ============ ASSET PAGE COMPONENT ============
+const AssetPage = ({ symbol, name, data5m, data1m, refData, funding, oi, refName }) => {
   const [backtest, setBacktest] = useState(null);
   const [showBacktest, setShowBacktest] = useState(false);
   const [backtestTf, setBacktestTf] = useState('5m');
-
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const [res5m, res1m, resBtc] = await Promise.all([
-          fetch('https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=5m&limit=500'),
-          fetch('https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&limit=500'),
-          fetch('https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=5m&limit=100')
-        ]);
-        const parse = (klines) => klines.map(k => ({ open: parseFloat(k[1]), high: parseFloat(k[2]), low: parseFloat(k[3]), close: parseFloat(k[4]), volume: parseFloat(k[5]) }));
-        const [klines5m, klines1m, klinesBtc] = await Promise.all([res5m.json(), res1m.json(), resBtc.json()]);
-        setData5m(parse(klines5m));
-        setData1m(parse(klines1m));
-        setDataBtc(parse(klinesBtc));
-        const parsed5m = parse(klines5m);
-        setPrice(parsed5m[parsed5m.length - 1].close);
-        setPriceChange(((parsed5m[parsed5m.length - 1].close - parsed5m[parsed5m.length - 2].close) / parsed5m[parsed5m.length - 2].close) * 100);
-        try {
-          const fundingRes = await fetch('https://fapi.binance.com/fapi/v1/fundingRate?symbol=SOLUSDT&limit=1');
-          const fundingData = await fundingRes.json();
-          if (fundingData[0]) setFunding(parseFloat(fundingData[0].fundingRate));
-        } catch (e) {}
-        try {
-          const oiRes = await fetch('https://fapi.binance.com/fapi/v1/openInterest?symbol=SOLUSDT');
-          const oiData = await oiRes.json();
-          const newOi = parseFloat(oiData.openInterest);
-          if (prevOi > 0) setOiChange(((newOi - prevOi) / prevOi) * 100);
-          setPrevOi(newOi);
-          setOi(newOi);
-        } catch (e) {}
-        setLoading(false);
-        setUpdate(new Date());
-      } catch (e) { setLoading(false); }
-    };
-    fetchData();
-    const ws = new WebSocket('wss://stream.binance.com:9443/ws/solusdt@kline_1m');
-    ws.onmessage = (e) => { const k = JSON.parse(e.data).k; setPrice(parseFloat(k.c)); setUpdate(new Date()); };
-    const interval = setInterval(fetchData, 3000);
-    return () => { ws.close(); clearInterval(interval); };
-  }, [prevOi]);
-
-  const btcAnalysis = useMemo(() => analyzeSignals(dataBtc, 0, 0, 0, 'NEUTRAL'), [dataBtc]);
-  const analysis5m = useMemo(() => analyzeSignals(data5m, funding, oi, oiChange, btcAnalysis.bias), [data5m, funding, oi, oiChange, btcAnalysis.bias]);
-  const analysis1m = useMemo(() => analyzeSignals(data1m, funding, oi, oiChange, btcAnalysis.bias), [data1m, funding, oi, oiChange, btcAnalysis.bias]);
+  
+  const refAnalysis = useMemo(() => analyzeSignals(refData, 0, 0, 0, 'NEUTRAL'), [refData]);
+  const analysis5m = useMemo(() => analyzeSignals(data5m, funding, oi, 0, refAnalysis.bias), [data5m, funding, oi, refAnalysis.bias]);
+  const analysis1m = useMemo(() => analyzeSignals(data1m, funding, oi, 0, refAnalysis.bias), [data1m, funding, oi, refAnalysis.bias]);
   
   const mtfConfluence = useMemo(() => {
-    if (analysis5m.bias === analysis1m.bias && analysis5m.bias !== 'NEUTRAL') {
-      return { aligned: true, bias: analysis5m.bias, strength: 'STRONG' };
-    } else if (analysis5m.bias !== 'NEUTRAL' && analysis1m.bias === 'NEUTRAL') {
-      return { aligned: false, bias: analysis5m.bias, strength: 'MODERATE' };
-    } else if (analysis5m.bias !== analysis1m.bias && analysis5m.bias !== 'NEUTRAL' && analysis1m.bias !== 'NEUTRAL') {
-      return { aligned: false, bias: 'CONFLICT', strength: 'WEAK' };
-    }
+    if (analysis5m.bias === analysis1m.bias && analysis5m.bias !== 'NEUTRAL') return { aligned: true, bias: analysis5m.bias, strength: 'STRONG' };
+    else if (analysis5m.bias !== 'NEUTRAL' && analysis1m.bias === 'NEUTRAL') return { aligned: false, bias: analysis5m.bias, strength: 'MODERATE' };
+    else if (analysis5m.bias !== analysis1m.bias && analysis5m.bias !== 'NEUTRAL' && analysis1m.bias !== 'NEUTRAL') return { aligned: false, bias: 'CONFLICT', strength: 'WEAK' };
     return { aligned: false, bias: 'NEUTRAL', strength: 'NONE' };
   }, [analysis5m.bias, analysis1m.bias]);
   
@@ -628,40 +501,31 @@ export default function Dashboard() {
     setBacktest(result);
     setShowBacktest(true);
   };
-
-  if (loading) return <div style={{ minHeight: '100vh', background: '#050505', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'monospace', color: '#10b981' }}><div>◉ LOADING...</div></div>;
-
-  // Determine if this is an A+ setup
-  const isAPlusSetup = mtfConfluence.aligned && 
-    (analysis5m.entryQuality === 'A+' || analysis5m.entryQuality === 'A') && 
-    btcAnalysis.bias === analysis5m.bias &&
-    analysis5m.volume.relative >= 1.0;
+  
+  const isAPlusSetup = mtfConfluence.aligned && (analysis5m.entryQuality === 'A+' || analysis5m.entryQuality === 'A') && refAnalysis.bias === analysis5m.bias && analysis5m.volume.relative >= 1.0;
+  const price = data5m.length > 0 ? data5m[data5m.length - 1].close : 0;
+  const priceChange = data5m.length > 1 ? ((data5m[data5m.length - 1].close - data5m[data5m.length - 2].close) / data5m[data5m.length - 2].close) * 100 : 0;
 
   return (
-    <div style={{ minHeight: '100vh', background: '#050505', color: '#e5e5e5', fontFamily: '"IBM Plex Mono", monospace', padding: '8px' }}>
+    <div>
       {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', flexWrap: 'wrap', gap: '6px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <span style={{ fontSize: '18px', fontWeight: '700' }}>SOL PERP</span>
-          <span style={{ background: isAPlusSetup ? '#10b981' : mtfConfluence.strength === 'STRONG' ? '#3b82f6' : '#666', color: '#000', padding: '2px 6px', fontSize: '8px', fontWeight: '600' }}>
-            {isAPlusSetup ? 'A+ SETUP' : mtfConfluence.strength}
-          </span>
+          <span style={{ fontSize: '18px', fontWeight: '700' }}>{name} PERP</span>
+          <span style={{ background: isAPlusSetup ? '#10b981' : mtfConfluence.strength === 'STRONG' ? '#3b82f6' : '#666', color: '#000', padding: '2px 6px', fontSize: '8px', fontWeight: '600' }}>{isAPlusSetup ? 'A+ SETUP' : mtfConfluence.strength}</span>
         </div>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px' }}>
-          <span style={{ fontSize: '18px', fontWeight: '600' }}>${price?.toFixed(2)}</span>
+          <span style={{ fontSize: '18px', fontWeight: '600' }}>${price?.toFixed(symbol === 'BTCUSDT' ? 0 : 2)}</span>
           <span style={{ color: priceChange >= 0 ? '#10b981' : '#ef4444', fontSize: '10px' }}>{priceChange >= 0 ? '▲' : '▼'}{Math.abs(priceChange).toFixed(2)}%</span>
         </div>
       </div>
       
-      {/* A+ Setup Alert */}
+      {/* Alerts */}
       {isAPlusSetup && (
         <div style={{ background: analysis5m.bias === 'LONG' ? 'rgba(16,185,129,0.25)' : 'rgba(239,68,68,0.25)', border: `2px solid ${analysis5m.bias === 'LONG' ? '#10b981' : '#ef4444'}`, padding: '10px', marginBottom: '8px', textAlign: 'center' }}>
-          <span style={{ color: analysis5m.bias === 'LONG' ? '#10b981' : '#ef4444', fontWeight: '700', fontSize: '14px' }}>
-            ⚡ A+ {analysis5m.bias} SETUP — MTF Aligned + BTC Confirmed + Volume ✓
-          </span>
+          <span style={{ color: analysis5m.bias === 'LONG' ? '#10b981' : '#ef4444', fontWeight: '700', fontSize: '14px' }}>⚡ A+ {analysis5m.bias} — MTF + {refName} + Volume ✓</span>
         </div>
       )}
-      
       {mtfConfluence.bias === 'CONFLICT' && (
         <div style={{ background: 'rgba(245,158,11,0.2)', border: '1px solid #f59e0b', padding: '8px', marginBottom: '8px', textAlign: 'center' }}>
           <span style={{ color: '#f59e0b', fontWeight: '600', fontSize: '11px' }}>⚠️ WAIT — 1m and 5m disagree</span>
@@ -673,20 +537,16 @@ export default function Dashboard() {
         <div style={{ background: '#0a0a0a', border: '1px solid #1a1a1a', padding: '4px' }}>
           <div style={{ fontSize: '8px', color: '#666', marginBottom: '2px', display: 'flex', justifyContent: 'space-between' }}>
             <span>5M</span>
-            <span style={{ color: analysis5m.bias === 'LONG' ? '#10b981' : analysis5m.bias === 'SHORT' ? '#ef4444' : '#666' }}>
-              {analysis5m.bias} {analysis5m.entryQuality !== 'NONE' ? `[${analysis5m.entryQuality}]` : ''}
-            </span>
+            <span style={{ color: analysis5m.bias === 'LONG' ? '#10b981' : analysis5m.bias === 'SHORT' ? '#ef4444' : '#666' }}>{analysis5m.bias} {analysis5m.entryQuality !== 'NONE' ? `[${analysis5m.entryQuality}]` : ''}</span>
           </div>
-          <Chart interval="5m" symbol="SOLUSDT" />
+          <Chart interval="5m" symbol={symbol} />
         </div>
         <div style={{ background: '#0a0a0a', border: '1px solid #1a1a1a', padding: '4px' }}>
           <div style={{ fontSize: '8px', color: '#666', marginBottom: '2px', display: 'flex', justifyContent: 'space-between' }}>
             <span>1M</span>
-            <span style={{ color: analysis1m.bias === 'LONG' ? '#10b981' : analysis1m.bias === 'SHORT' ? '#ef4444' : '#666' }}>
-              {analysis1m.bias} {analysis1m.entryQuality !== 'NONE' ? `[${analysis1m.entryQuality}]` : ''}
-            </span>
+            <span style={{ color: analysis1m.bias === 'LONG' ? '#10b981' : analysis1m.bias === 'SHORT' ? '#ef4444' : '#666' }}>{analysis1m.bias} {analysis1m.entryQuality !== 'NONE' ? `[${analysis1m.entryQuality}]` : ''}</span>
           </div>
-          <Chart interval="1m" symbol="SOLUSDT" />
+          <Chart interval="1m" symbol={symbol} />
         </div>
       </div>
       
@@ -696,22 +556,22 @@ export default function Dashboard() {
           {/* Stats */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: '6px' }}>
             <StatBox label="FUNDING" value={`${(funding * 100).toFixed(3)}%`} color={funding > 0.0003 ? '#ef4444' : funding < -0.0003 ? '#10b981' : '#888'} />
-            <StatBox label="BTC" value={btcAnalysis.bias} color={btcAnalysis.bias === 'LONG' ? '#10b981' : btcAnalysis.bias === 'SHORT' ? '#ef4444' : '#666'} />
+            <StatBox label={refName} value={refAnalysis.bias} color={refAnalysis.bias === 'LONG' ? '#10b981' : refAnalysis.bias === 'SHORT' ? '#ef4444' : '#666'} />
             <StatBox label="STRUCT" value={analysis5m.structure?.toUpperCase().slice(0,5) || 'N/A'} color={analysis5m.structure === 'uptrend' ? '#10b981' : analysis5m.structure === 'downtrend' ? '#ef4444' : '#888'} />
             <StatBox label="VOL" value={`${analysis5m.volume?.relative?.toFixed(1) || '1.0'}x`} color={analysis5m.volume?.relative >= 1.0 ? '#10b981' : '#ef4444'} />
             <StatBox label="ADX" value={analysis5m.indicators?.adx?.toFixed(0) || '--'} color={analysis5m.indicators?.adx >= 20 ? '#10b981' : '#ef4444'} />
-            <StatBox label="QUALITY" value={analysis5m.entryQuality || 'NONE'} color={analysis5m.entryQuality === 'A+' ? '#10b981' : analysis5m.entryQuality === 'A' ? '#3b82f6' : analysis5m.entryQuality === 'B' ? '#f59e0b' : '#666'} />
+            <StatBox label="QUALITY" value={analysis5m.entryQuality || 'NONE'} color={analysis5m.entryQuality === 'A+' ? '#10b981' : analysis5m.entryQuality === 'A' ? '#3b82f6' : '#f59e0b'} />
           </div>
           
           {/* Signal Boxes */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
             <SignalBox analysis={analysis5m} timeframe="5M" />
             <SignalBox analysis={analysis1m} timeframe="1M" />
-            <SignalBox analysis={btcAnalysis} timeframe="BTC" />
+            <SignalBox analysis={refAnalysis} timeframe={refName} />
           </div>
           
-          {/* Entry Quality Reasons */}
-          {analysis5m.qualityReasons && analysis5m.qualityReasons.length > 0 && (
+          {/* Quality Reasons */}
+          {analysis5m.qualityReasons?.length > 0 && (
             <div style={{ background: '#0a0a0a', border: '1px solid #1a1a1a', padding: '8px' }}>
               <div style={{ fontSize: '8px', color: '#666', marginBottom: '4px' }}>ENTRY QUALITY FACTORS</div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
@@ -725,26 +585,11 @@ export default function Dashboard() {
           {/* Trade Plan */}
           {analysis5m.tradePlan && analysis5m.shouldTrade && (
             <div style={{ background: analysis5m.tradePlan.direction === 'LONG' ? 'rgba(16,185,129,0.05)' : 'rgba(239,68,68,0.05)', border: `1px solid ${analysis5m.tradePlan.direction === 'LONG' ? '#10b981' : '#ef4444'}`, padding: '8px' }}>
-              <div style={{ fontSize: '8px', color: '#888', letterSpacing: '1px', marginBottom: '6px' }}>
-                TRADE PLAN — {analysis5m.tradePlan.direction}
-                {isAPlusSetup && <span style={{ color: '#10b981', marginLeft: '8px' }}>★ HIGH PROBABILITY</span>}
-              </div>
+              <div style={{ fontSize: '8px', color: '#888', letterSpacing: '1px', marginBottom: '6px' }}>TRADE PLAN — {analysis5m.tradePlan.direction} {isAPlusSetup && <span style={{ color: '#10b981', marginLeft: '8px' }}>★ HIGH PROBABILITY</span>}</div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px' }}>
-                <div>
-                  <div style={{ fontSize: '7px', color: '#666' }}>ENTRY</div>
-                  <div style={{ fontSize: '12px', color: '#fff' }}>${analysis5m.tradePlan.entry.aggressive.toFixed(3)}</div>
-                  <div style={{ fontSize: '8px', color: '#666' }}>PB: ${analysis5m.tradePlan.entry.pullback.toFixed(3)}</div>
-                </div>
-                <div>
-                  <div style={{ fontSize: '7px', color: '#666' }}>STOP</div>
-                  <div style={{ fontSize: '12px', color: '#ef4444' }}>${analysis5m.tradePlan.stopLoss.toFixed(3)}</div>
-                  <div style={{ fontSize: '8px', color: '#666' }}>Risk: {analysis5m.tradePlan.riskPercent}%</div>
-                </div>
-                <div>
-                  <div style={{ fontSize: '7px', color: '#666' }}>TARGETS</div>
-                  <div style={{ fontSize: '9px', color: '#10b981' }}>TP1: ${analysis5m.tradePlan.targets[0].toFixed(2)}</div>
-                  <div style={{ fontSize: '9px', color: '#10b981' }}>TP2: ${analysis5m.tradePlan.targets[1].toFixed(2)}</div>
-                </div>
+                <div><div style={{ fontSize: '7px', color: '#666' }}>ENTRY</div><div style={{ fontSize: '12px', color: '#fff' }}>${analysis5m.tradePlan.entry.aggressive.toFixed(symbol === 'BTCUSDT' ? 0 : 3)}</div></div>
+                <div><div style={{ fontSize: '7px', color: '#666' }}>STOP</div><div style={{ fontSize: '12px', color: '#ef4444' }}>${analysis5m.tradePlan.stopLoss.toFixed(symbol === 'BTCUSDT' ? 0 : 3)}</div></div>
+                <div><div style={{ fontSize: '7px', color: '#666' }}>TARGETS</div><div style={{ fontSize: '9px', color: '#10b981' }}>TP1: ${analysis5m.tradePlan.targets[0].toFixed(symbol === 'BTCUSDT' ? 0 : 2)}</div><div style={{ fontSize: '9px', color: '#10b981' }}>TP2: ${analysis5m.tradePlan.targets[1].toFixed(symbol === 'BTCUSDT' ? 0 : 2)}</div></div>
               </div>
             </div>
           )}
@@ -756,12 +601,10 @@ export default function Dashboard() {
             </div>
           )}
           
-          {/* Divergence Alert */}
+          {/* Divergence */}
           {(analysis5m.divergence?.bullish || analysis5m.divergence?.bearish) && (
             <div style={{ background: analysis5m.divergence.bullish ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)', border: `1px solid ${analysis5m.divergence.bullish ? '#10b981' : '#ef4444'}`, padding: '8px', textAlign: 'center' }}>
-              <span style={{ color: analysis5m.divergence.bullish ? '#10b981' : '#ef4444', fontWeight: '700', fontSize: '11px' }}>
-                🎯 {analysis5m.divergence.bullish ? 'BULLISH' : 'BEARISH'} DIVERGENCE
-              </span>
+              <span style={{ color: analysis5m.divergence.bullish ? '#10b981' : '#ef4444', fontWeight: '700', fontSize: '11px' }}>🎯 {analysis5m.divergence.bullish ? 'BULLISH' : 'BEARISH'} DIVERGENCE</span>
             </div>
           )}
           
@@ -774,29 +617,23 @@ export default function Dashboard() {
           {backtest && showBacktest && (
             <div style={{ background: '#0a0a0a', border: '1px solid #1a1a1a', padding: '8px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                <div style={{ fontSize: '8px', color: '#666', letterSpacing: '1px' }}>BACKTEST {backtestTf.toUpperCase()} (A/A+ entries only)</div>
+                <div style={{ fontSize: '8px', color: '#666', letterSpacing: '1px' }}>BACKTEST {backtestTf.toUpperCase()}</div>
                 <button onClick={() => setShowBacktest(false)} style={{ background: 'none', border: 'none', color: '#666', cursor: 'pointer', fontSize: '12px' }}>×</button>
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: '4px', marginBottom: '8px' }}>
                 <div style={{ background: '#111', padding: '4px', textAlign: 'center' }}><div style={{ fontSize: '7px', color: '#666' }}>WIN%</div><div style={{ fontSize: '12px', color: parseFloat(backtest.winRate) >= 50 ? '#10b981' : '#ef4444' }}>{backtest.winRate}%</div></div>
                 <div style={{ background: '#111', padding: '4px', textAlign: 'center' }}><div style={{ fontSize: '7px', color: '#666' }}>TRADES</div><div style={{ fontSize: '12px', color: '#fff' }}>{backtest.totalTrades}</div></div>
-                <div style={{ background: '#111', padding: '4px', textAlign: 'center' }}><div style={{ fontSize: '7px', color: '#666' }}>SKIPPED</div><div style={{ fontSize: '12px', color: '#f59e0b' }}>{backtest.skippedTrades}</div></div>
+                <div style={{ background: '#111', padding: '4px', textAlign: 'center' }}><div style={{ fontSize: '7px', color: '#666' }}>SKIP</div><div style={{ fontSize: '12px', color: '#f59e0b' }}>{backtest.skippedTrades}</div></div>
                 <div style={{ background: '#111', padding: '4px', textAlign: 'center' }}><div style={{ fontSize: '7px', color: '#666' }}>P&L</div><div style={{ fontSize: '12px', color: parseFloat(backtest.totalPnL) > 0 ? '#10b981' : '#ef4444' }}>{backtest.totalPnL}%</div></div>
                 <div style={{ background: '#111', padding: '4px', textAlign: 'center' }}><div style={{ fontSize: '7px', color: '#666' }}>DD</div><div style={{ fontSize: '12px', color: '#ef4444' }}>{backtest.maxDrawdown}%</div></div>
                 <div style={{ background: '#111', padding: '4px', textAlign: 'center' }}><div style={{ fontSize: '7px', color: '#666' }}>PF</div><div style={{ fontSize: '12px', color: parseFloat(backtest.profitFactor) > 1 ? '#10b981' : '#ef4444' }}>{backtest.profitFactor}</div></div>
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '4px', marginBottom: '6px' }}>
-                <div style={{ background: '#111', padding: '4px', textAlign: 'center' }}><div style={{ fontSize: '7px', color: '#666' }}>AVG WIN</div><div style={{ fontSize: '11px', color: '#10b981' }}>{backtest.avgWin}R</div></div>
-                <div style={{ background: '#111', padding: '4px', textAlign: 'center' }}><div style={{ fontSize: '7px', color: '#666' }}>AVG LOSS</div><div style={{ fontSize: '11px', color: '#ef4444' }}>{backtest.avgLoss}R</div></div>
-                <div style={{ background: '#111', padding: '4px', textAlign: 'center' }}><div style={{ fontSize: '7px', color: '#666' }}>EXPECT</div><div style={{ fontSize: '11px', color: parseFloat(backtest.expectancy) > 0 ? '#10b981' : '#ef4444' }}>{backtest.expectancy}R</div></div>
-                <div style={{ background: '#111', padding: '4px', textAlign: 'center' }}><div style={{ fontSize: '7px', color: '#666' }}>W/L</div><div style={{ fontSize: '11px', color: '#fff' }}>{backtest.winningTrades}/{backtest.losingTrades}</div></div>
-              </div>
-              <div style={{ maxHeight: '120px', overflow: 'auto' }}>
+              <div style={{ maxHeight: '100px', overflow: 'auto' }}>
                 {backtest.trades.map((t, i) => (
-                  <div key={i} style={{ display: 'grid', gridTemplateColumns: '35px 15px 1fr 60px 45px', padding: '2px 0', borderBottom: '1px solid #1a1a1a', fontSize: '8px', alignItems: 'center' }}>
+                  <div key={i} style={{ display: 'grid', gridTemplateColumns: '35px 18px 1fr 45px 45px', padding: '2px 0', borderBottom: '1px solid #1a1a1a', fontSize: '8px', alignItems: 'center' }}>
                     <span style={{ color: t.direction === 'LONG' ? '#10b981' : '#ef4444' }}>{t.direction}</span>
                     <span style={{ color: t.quality === 'A+' ? '#10b981' : '#3b82f6', fontWeight: '600' }}>{t.quality}</span>
-                    <span style={{ color: '#666' }}>${t.entry.toFixed(2)}→${t.exit.toFixed(2)}</span>
+                    <span style={{ color: '#666' }}>${t.entry.toFixed(0)}→${t.exit.toFixed(0)}</span>
                     <span style={{ color: '#666' }}>{t.reason}</span>
                     <span style={{ color: t.pnl > 0 ? '#10b981' : '#ef4444', textAlign: 'right' }}>{t.pnlPercent > 0 ? '+' : ''}{t.pnlPercent.toFixed(2)}R</span>
                   </div>
@@ -813,8 +650,8 @@ export default function Dashboard() {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px' }}>
               <Badge label="RSI" value={analysis5m.indicators?.rsi?.toFixed(0) || '--'} status={analysis5m.indicators?.rsi < 30 ? 'bullish' : analysis5m.indicators?.rsi > 70 ? 'bearish' : 'neutral'} />
               <Badge label="STOCH" value={analysis5m.indicators?.stochK?.toFixed(0) || '--'} status={analysis5m.indicators?.stochK < 20 ? 'bullish' : analysis5m.indicators?.stochK > 80 ? 'bearish' : 'neutral'} />
-              <Badge label="MACD" value={analysis5m.indicators?.macd?.toFixed(3) || '--'} status={analysis5m.indicators?.macd > analysis5m.indicators?.macdSignal ? 'bullish' : 'bearish'} />
-              <Badge label="ATR" value={`$${analysis5m.indicators?.atr?.toFixed(2) || '--'}`} status="neutral" />
+              <Badge label="MACD" value={analysis5m.indicators?.macd?.toFixed(1) || '--'} status={analysis5m.indicators?.macd > analysis5m.indicators?.macdSignal ? 'bullish' : 'bearish'} />
+              <Badge label="ATR" value={`$${analysis5m.indicators?.atr?.toFixed(symbol === 'BTCUSDT' ? 0 : 2) || '--'}`} status="neutral" />
             </div>
           </div>
           
@@ -836,7 +673,7 @@ export default function Dashboard() {
           <div style={{ background: '#0a0a0a', border: '1px solid #1a1a1a', padding: '6px', flex: 1, overflow: 'auto' }}>
             <div style={{ fontSize: '7px', color: '#666', letterSpacing: '1px', marginBottom: '4px' }}>SIGNALS</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-              {(analysis5m.signals || []).map((s, i) => (
+              {(analysis5m.signals || []).slice(0, 12).map((s, i) => (
                 <div key={i} style={{ fontSize: '8px', padding: '2px 4px', background: s.type === 'bullish' ? 'rgba(16,185,129,0.1)' : s.type === 'bearish' ? 'rgba(239,68,68,0.1)' : 'rgba(100,100,100,0.1)', borderLeft: `2px solid ${s.type === 'bullish' ? '#10b981' : s.type === 'bearish' ? '#ef4444' : '#666'}`, color: s.type === 'bullish' ? '#10b981' : s.type === 'bearish' ? '#ef4444' : '#888' }}>
                   {s.type === 'bullish' ? '▲' : s.type === 'bearish' ? '▼' : '◆'} {s.text}
                 </div>
@@ -845,10 +682,145 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+    </div>
+  );
+};
+
+// ============ MAIN DASHBOARD ============
+export default function Dashboard() {
+  const [activeTab, setActiveTab] = useState('SOL');
+  const [loading, setLoading] = useState(true);
+  const [update, setUpdate] = useState(null);
+  
+  // SOL data
+  const [solData5m, setSolData5m] = useState([]);
+  const [solData1m, setSolData1m] = useState([]);
+  const [solFunding, setSolFunding] = useState(0);
+  const [solOi, setSolOi] = useState(0);
+  
+  // BTC data
+  const [btcData5m, setBtcData5m] = useState([]);
+  const [btcData1m, setBtcData1m] = useState([]);
+  const [btcFunding, setBtcFunding] = useState(0);
+  const [btcOi, setBtcOi] = useState(0);
+  
+  // ETH data (reference for BTC)
+  const [ethData5m, setEthData5m] = useState([]);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const [solRes5m, solRes1m, btcRes5m, btcRes1m, ethRes5m] = await Promise.all([
+          fetch('https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=5m&limit=500'),
+          fetch('https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&limit=500'),
+          fetch('https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=5m&limit=500'),
+          fetch('https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=500'),
+          fetch('https://api.binance.com/api/v3/klines?symbol=ETHUSDT&interval=5m&limit=100')
+        ]);
+        
+        const parse = (klines) => klines.map(k => ({ open: parseFloat(k[1]), high: parseFloat(k[2]), low: parseFloat(k[3]), close: parseFloat(k[4]), volume: parseFloat(k[5]) }));
+        
+        const [solKlines5m, solKlines1m, btcKlines5m, btcKlines1m, ethKlines5m] = await Promise.all([
+          solRes5m.json(), solRes1m.json(), btcRes5m.json(), btcRes1m.json(), ethRes5m.json()
+        ]);
+        
+        setSolData5m(parse(solKlines5m));
+        setSolData1m(parse(solKlines1m));
+        setBtcData5m(parse(btcKlines5m));
+        setBtcData1m(parse(btcKlines1m));
+        setEthData5m(parse(ethKlines5m));
+        
+        // Funding rates
+        try {
+          const [solFundingRes, btcFundingRes] = await Promise.all([
+            fetch('https://fapi.binance.com/fapi/v1/fundingRate?symbol=SOLUSDT&limit=1'),
+            fetch('https://fapi.binance.com/fapi/v1/fundingRate?symbol=BTCUSDT&limit=1')
+          ]);
+          const [solFundingData, btcFundingData] = await Promise.all([solFundingRes.json(), btcFundingRes.json()]);
+          if (solFundingData[0]) setSolFunding(parseFloat(solFundingData[0].fundingRate));
+          if (btcFundingData[0]) setBtcFunding(parseFloat(btcFundingData[0].fundingRate));
+        } catch (e) {}
+        
+        setLoading(false);
+        setUpdate(new Date());
+      } catch (e) { setLoading(false); }
+    };
+    
+    fetchData();
+    const interval = setInterval(fetchData, 3000);
+    return () => clearInterval(interval);
+  }, []);
+
+  if (loading) return <div style={{ minHeight: '100vh', background: '#050505', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'monospace', color: '#10b981' }}><div>◉ LOADING...</div></div>;
+
+  return (
+    <div style={{ minHeight: '100vh', background: '#050505', color: '#e5e5e5', fontFamily: '"IBM Plex Mono", monospace', padding: '8px' }}>
+      {/* Tab Navigation */}
+      <div style={{ display: 'flex', gap: '4px', marginBottom: '10px' }}>
+        <button 
+          onClick={() => setActiveTab('SOL')} 
+          style={{ 
+            background: activeTab === 'SOL' ? '#10b981' : '#1a1a1a', 
+            color: activeTab === 'SOL' ? '#000' : '#888', 
+            border: 'none', 
+            padding: '8px 20px', 
+            fontSize: '11px', 
+            fontWeight: '700', 
+            cursor: 'pointer', 
+            fontFamily: 'inherit',
+            letterSpacing: '1px'
+          }}
+        >
+          SOL PERP
+        </button>
+        <button 
+          onClick={() => setActiveTab('BTC')} 
+          style={{ 
+            background: activeTab === 'BTC' ? '#f59e0b' : '#1a1a1a', 
+            color: activeTab === 'BTC' ? '#000' : '#888', 
+            border: 'none', 
+            padding: '8px 20px', 
+            fontSize: '11px', 
+            fontWeight: '700', 
+            cursor: 'pointer', 
+            fontFamily: 'inherit',
+            letterSpacing: '1px'
+          }}
+        >
+          BTC PERP
+        </button>
+      </div>
       
-      <div style={{ marginTop: '6px', display: 'flex', justifyContent: 'space-between', fontSize: '7px', color: '#444' }}>
-        <div>High Win Rate Mode • A/A+ entries only • 3s refresh • {update?.toLocaleTimeString()}</div>
-        <div>NFA</div>
+      {/* Asset Pages */}
+      {activeTab === 'SOL' && (
+        <AssetPage 
+          symbol="SOLUSDT" 
+          name="SOL" 
+          data5m={solData5m} 
+          data1m={solData1m} 
+          refData={btcData5m} 
+          funding={solFunding} 
+          oi={solOi}
+          refName="BTC"
+        />
+      )}
+      
+      {activeTab === 'BTC' && (
+        <AssetPage 
+          symbol="BTCUSDT" 
+          name="BTC" 
+          data5m={btcData5m} 
+          data1m={btcData1m} 
+          refData={ethData5m} 
+          funding={btcFunding} 
+          oi={btcOi}
+          refName="ETH"
+        />
+      )}
+      
+      <div style={{ marginTop: '8px', display: 'flex', justifyContent: 'space-between', fontSize: '7px', color: '#444' }}>
+        <div>High Win Rate • A/A+ Only • 3s refresh • {update?.toLocaleTimeString()}</div>
+        <div>NFA DYOR</div>
       </div>
     </div>
   );
