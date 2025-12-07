@@ -1,4 +1,64 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+
+// TradingView Widget Component
+const TradingViewWidget = () => {
+  const containerRef = useRef(null);
+  
+  useEffect(() => {
+    if (!containerRef.current) return;
+    
+    // Clear any existing content
+    containerRef.current.innerHTML = '';
+    
+    // Create widget container div
+    const widgetDiv = document.createElement('div');
+    widgetDiv.className = 'tradingview-widget-container__widget';
+    widgetDiv.style.height = '100%';
+    widgetDiv.style.width = '100%';
+    containerRef.current.appendChild(widgetDiv);
+    
+    // Create and append script
+    const script = document.createElement('script');
+    script.src = 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
+    script.type = 'text/javascript';
+    script.async = true;
+    script.innerHTML = JSON.stringify({
+      "autosize": true,
+      "symbol": "BINANCE:SOLUSDT.P",
+      "interval": "5",
+      "timezone": "Etc/UTC",
+      "theme": "dark",
+      "style": "1",
+      "locale": "en",
+      "backgroundColor": "rgba(5, 5, 5, 1)",
+      "gridColor": "rgba(30, 30, 30, 1)",
+      "allow_symbol_change": true,
+      "calendar": false,
+      "support_host": "https://www.tradingview.com",
+      "studies": [
+        "STD;EMA",
+        "STD;Bollinger_Bands",
+        "STD;RSI",
+        "STD;MACD"
+      ]
+    });
+    containerRef.current.appendChild(script);
+    
+    return () => {
+      if (containerRef.current) {
+        containerRef.current.innerHTML = '';
+      }
+    };
+  }, []);
+  
+  return (
+    <div 
+      ref={containerRef} 
+      className="tradingview-widget-container" 
+      style={{ height: '100%', width: '100%' }}
+    />
+  );
+};
 
 // Generate realistic SOL price data for analysis
 const generateMarketData = () => {
@@ -274,7 +334,6 @@ export default function Dashboard() {
   }, []);
   
   const analysis = useMemo(() => analyzeSignals(data), [data]);
-  const tvUrl = "https://www.tradingview.com/widgetembed/?frameElementId=tv&symbol=BINANCE%3ASOLUSDT.P&interval=5&hidesidetoolbar=0&symboledit=0&saveimage=0&toolbarbg=f1f3f6&studies=STD%3BEMA%3BSTD%3BEMA%3BSTD%3BBollinger_Bands%3BSTD%3BRSI%3BSTD%3BMACD&theme=dark&style=1&timezone=Etc%2FUTC";
   
   return (
     <div style={{ minHeight: '100vh', background: '#050505', color: '#e5e5e5', fontFamily: '"IBM Plex Mono",monospace', padding: '16px' }}>
@@ -292,7 +351,7 @@ export default function Dashboard() {
       
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: '16px', minHeight: 'calc(100vh - 120px)' }}>
         <div style={{ background: '#0a0a0a', border: '1px solid #1a1a1a', overflow: 'hidden', minHeight: '600px' }}>
-          <iframe src={tvUrl} style={{ width: '100%', height: '100%', border: 'none', minHeight: '600px' }} allowFullScreen />
+          <TradingViewWidget />
         </div>
         
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
