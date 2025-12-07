@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 
 // ============ CHART COMPONENT ============
-const Chart = ({ interval = '1m', symbol = 'SOLUSDT' }) => {
+const Chart = ({ interval = '5m', symbol = 'SOLUSDT' }) => {
   const containerRef = useRef(null);
   const chartRef = useRef(null);
 
@@ -14,12 +14,12 @@ const Chart = ({ interval = '1m', symbol = 'SOLUSDT' }) => {
 
       const chart = createChart(containerRef.current, {
         width: containerRef.current.clientWidth,
-        height: 280,
+        height: 300,
         layout: { background: { color: '#0a0a0a' }, textColor: '#666' },
         grid: { vertLines: { color: '#1a1a1a' }, horzLines: { color: '#1a1a1a' } },
         crosshair: { mode: 0 },
         rightPriceScale: { borderColor: '#1a1a1a' },
-        timeScale: { borderColor: '#1a1a1a', timeVisible: true, secondsVisible: true },
+        timeScale: { borderColor: '#1a1a1a', timeVisible: true },
       });
       chartRef.current = chart;
 
@@ -29,12 +29,11 @@ const Chart = ({ interval = '1m', symbol = 'SOLUSDT' }) => {
         wickDownColor: '#ef4444', wickUpColor: '#10b981',
       });
 
-      const ema5 = chart.addLineSeries({ color: '#10b981', lineWidth: 1 });
-      const ema13 = chart.addLineSeries({ color: '#f59e0b', lineWidth: 1 });
-      const vwap = chart.addLineSeries({ color: '#8b5cf6', lineWidth: 1, lineStyle: 2 });
+      const ema20 = chart.addLineSeries({ color: '#3b82f6', lineWidth: 2 });
+      const ema50 = chart.addLineSeries({ color: '#f59e0b', lineWidth: 2 });
 
       try {
-        const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=200`);
+        const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=300`);
         const data = await res.json();
         const candles = data.map(d => ({ time: d[0] / 1000, open: parseFloat(d[1]), high: parseFloat(d[2]), low: parseFloat(d[3]), close: parseFloat(d[4]), volume: parseFloat(d[5]) }));
         candleSeries.setData(candles);
@@ -44,18 +43,8 @@ const Chart = ({ interval = '1m', symbol = 'SOLUSDT' }) => {
           return data.map((d, i) => { if (i === 0) return { time: d.time, value: ema }; ema = d.close * k + ema * (1 - k); return { time: d.time, value: ema }; });
         };
         
-        // VWAP calculation
-        let cumVol = 0, cumPV = 0;
-        const vwapData = candles.map(d => {
-          const typical = (d.high + d.low + d.close) / 3;
-          cumPV += typical * d.volume;
-          cumVol += d.volume;
-          return { time: d.time, value: cumVol > 0 ? cumPV / cumVol : typical };
-        });
-        
-        ema5.setData(calcEMA(candles, 5));
-        ema13.setData(calcEMA(candles, 13));
-        vwap.setData(vwapData);
+        ema20.setData(calcEMA(candles, 20));
+        ema50.setData(calcEMA(candles, 50));
         chart.timeScale().fitContent();
 
         const wsSymbol = symbol.toLowerCase();
@@ -74,17 +63,16 @@ const Chart = ({ interval = '1m', symbol = 'SOLUSDT' }) => {
     return () => { ws?.close(); };
   }, [interval, symbol]);
 
-  return <div ref={containerRef} style={{ width: '100%', height: '280px' }} />;
+  return <div ref={containerRef} style={{ width: '100%', height: '300px' }} />;
 };
 
-// ============ SCALPING INDICATORS ============
+// ============ INDICATORS ============
 const calcEMA = (data, period) => {
   const k = 2 / (period + 1); let ema = data[0]?.close || 0;
   return data.map((d, i) => { if (i === 0) return ema; ema = d.close * k + ema * (1 - k); return ema; });
 };
 
-// Fast RSI for scalping (6 period)
-const calcRSI = (data, period = 6) => {
+const calcRSI = (data, period = 14) => {
   const changes = data.map((d, i) => i === 0 ? 0 : d.close - data[i - 1].close);
   const gains = changes.map(c => c > 0 ? c : 0), losses = changes.map(c => c < 0 ? -c : 0);
   let avgGain = gains.slice(1, period + 1).reduce((a, b) => a + b, 0) / period;
@@ -104,327 +92,459 @@ const calcMACD = (data) => {
   return { macd: macdLine, signal, histogram: macdLine.map((v, i) => v - signal[i]) };
 };
 
-const calcATR = (data, period = 10) => {
+const calcATR = (data, period = 14) => {
   const tr = data.map((d, i) => i === 0 ? d.high - d.low : Math.max(d.high - d.low, Math.abs(d.high - data[i-1].close), Math.abs(d.low - data[i-1].close)));
   return tr.map((_, i) => i < period ? tr.slice(0, i + 1).reduce((a, b) => a + b, 0) / (i + 1) : tr.slice(i - period + 1, i + 1).reduce((a, b) => a + b, 0) / period);
 };
 
-const calcVWAP = (data) => {
-  let cumVol = 0, cumPV = 0;
-  return data.map(d => {
-    const typical = (d.high + d.low + d.close) / 3;
-    cumPV += typical * d.volume;
-    cumVol += d.volume;
-    return cumVol > 0 ? cumPV / cumVol : typical;
-  });
+const calcADX = (data, period = 14) => {
+  const tr = data.map((d, i) => i === 0 ? d.high - d.low : Math.max(d.high - d.low, Math.abs(d.high - data[i-1].close), Math.abs(d.low - data[i-1].close)));
+  const plusDM = data.map((d, i) => { if (i === 0) return 0; const up = d.high - data[i-1].high, down = data[i-1].low - d.low; return up > down && up > 0 ? up : 0; });
+  const minusDM = data.map((d, i) => { if (i === 0) return 0; const up = d.high - data[i-1].high, down = data[i-1].low - d.low; return down > up && down > 0 ? down : 0; });
+  const smooth = (arr) => arr.map((_, i) => i < period ? arr.slice(0, i + 1).reduce((a, b) => a + b, 0) : arr.slice(i - period + 1, i + 1).reduce((a, b) => a + b, 0));
+  const sTR = smooth(tr), sPlus = smooth(plusDM), sMinus = smooth(minusDM);
+  const plusDI = sPlus.map((v, i) => sTR[i] === 0 ? 0 : (v / sTR[i]) * 100);
+  const minusDI = sMinus.map((v, i) => sTR[i] === 0 ? 0 : (v / sTR[i]) * 100);
+  const dx = plusDI.map((v, i) => { const sum = v + minusDI[i]; return sum === 0 ? 0 : (Math.abs(v - minusDI[i]) / sum) * 100; });
+  const adx = dx.map((_, i) => i < period * 2 ? dx.slice(0, i + 1).reduce((a, b) => a + b, 0) / (i + 1) : dx.slice(i - period + 1, i + 1).reduce((a, b) => a + b, 0) / period);
+  return { adx, plusDI, minusDI };
 };
 
-// Volume analysis for scalping
-const analyzeVolume = (data, period = 10) => {
-  if (data.length < period) return { relative: 1, delta: 0, spike: false, trend: 'neutral' };
+// Bollinger Bands for squeeze detection
+const calcBB = (data, period = 20, mult = 2) => data.map((_, i) => {
+  if (i < period - 1) return { upper: data[i].close, lower: data[i].close, middle: data[i].close, width: 0.05 };
+  const slice = data.slice(i - period + 1, i + 1), sma = slice.reduce((a, b) => a + b.close, 0) / period;
+  const std = Math.sqrt(slice.reduce((a, b) => a + Math.pow(b.close - sma, 2), 0) / period);
+  return { upper: sma + mult * std, lower: sma - mult * std, middle: sma, width: std > 0 ? (mult * std * 2) / sma : 0.01 };
+});
+
+// ============ BREAKOUT DETECTION ============
+const detectConsolidation = (data, lookback = 30) => {
+  if (data.length < lookback) return { inConsolidation: false };
+  
+  const recent = data.slice(-lookback);
+  const highs = recent.map(d => d.high);
+  const lows = recent.map(d => d.low);
+  const rangeHigh = Math.max(...highs);
+  const rangeLow = Math.min(...lows);
+  const rangeSize = (rangeHigh - rangeLow) / rangeLow * 100;
+  
+  // Check if price has been ranging (less than 5% range for 30 candles)
+  const isConsolidating = rangeSize < 5;
+  
+  // Find resistance and support levels
+  const resistance = rangeHigh;
+  const support = rangeLow;
+  
+  // Current position in range
+  const currentPrice = data[data.length - 1].close;
+  const positionInRange = (currentPrice - rangeLow) / (rangeHigh - rangeLow);
+  
+  return {
+    inConsolidation: isConsolidating,
+    resistance,
+    support,
+    rangeSize,
+    positionInRange,
+    rangeHigh,
+    rangeLow
+  };
+};
+
+const detectBreakout = (data, consolidation) => {
+  if (data.length < 5) return { breakout: false };
+  
+  const current = data[data.length - 1];
+  const prev = data[data.length - 2];
+  const prev2 = data[data.length - 3];
+  
+  // Breakout above resistance
+  const bullishBreakout = current.close > consolidation.resistance && 
+                          prev.close <= consolidation.resistance &&
+                          current.close > current.open;
+  
+  // Breakdown below support                        
+  const bearishBreakout = current.close < consolidation.support && 
+                          prev.close >= consolidation.support &&
+                          current.close < current.open;
+  
+  // Check for failed breakout (wick above but close inside)
+  const failedBullish = current.high > consolidation.resistance && current.close < consolidation.resistance;
+  const failedBearish = current.low < consolidation.support && current.close > consolidation.support;
+  
+  return {
+    bullishBreakout,
+    bearishBreakout,
+    failedBullish,
+    failedBearish,
+    resistance: consolidation.resistance,
+    support: consolidation.support
+  };
+};
+
+// Volume analysis for breakout confirmation
+const analyzeBreakoutVolume = (data, period = 20) => {
+  if (data.length < period) return { relative: 1, expanding: false, climax: false };
+  
   const recent = data.slice(-period);
   const avgVolume = recent.reduce((a, b) => a + b.volume, 0) / period;
   const currentVolume = data[data.length - 1].volume;
+  const prevVolume = data[data.length - 2].volume;
   const relative = currentVolume / avgVolume;
   
-  // Volume delta (buying vs selling pressure)
-  const current = data[data.length - 1];
-  const range = current.high - current.low;
-  const delta = range > 0 ? ((current.close - current.low) / range - 0.5) * 2 : 0; // -1 to 1
+  // Volume expansion (last 3 candles increasing)
+  const vol3 = data.slice(-3).map(d => d.volume);
+  const expanding = vol3[2] > vol3[1] && vol3[1] > vol3[0];
   
-  // Recent volume trend
-  const last3Vol = data.slice(-3).reduce((a, b) => a + b.volume, 0) / 3;
-  const prev3Vol = data.slice(-6, -3).reduce((a, b) => a + b.volume, 0) / 3;
-  const volTrend = last3Vol > prev3Vol * 1.2 ? 'increasing' : last3Vol < prev3Vol * 0.8 ? 'decreasing' : 'stable';
+  // Volume climax (huge spike)
+  const climax = relative > 3;
   
-  return { relative, delta, spike: relative > 2.5, bigSpike: relative > 4, trend: volTrend, avgVolume, currentVolume };
+  // Accumulation (above average volume on up moves)
+  let accumulationScore = 0;
+  for (let i = data.length - 10; i < data.length; i++) {
+    if (data[i].close > data[i].open && data[i].volume > avgVolume) accumulationScore++;
+    if (data[i].close < data[i].open && data[i].volume > avgVolume) accumulationScore--;
+  }
+  
+  return { relative, expanding, climax, avgVolume, currentVolume, accumulationScore };
 };
 
-// Candle pattern detection for scalping
-const detectCandlePatterns = (data) => {
-  if (data.length < 3) return { pattern: 'none', strength: 0 };
+// Trend strength for big moves
+const analyzeTrendStrength = (data) => {
+  if (data.length < 50) return { strength: 0, direction: 'neutral' };
   
-  const c0 = data[data.length - 1]; // Current
-  const c1 = data[data.length - 2]; // Previous
-  const c2 = data[data.length - 3]; // 2 candles ago
+  const ema20 = calcEMA(data, 20);
+  const ema50 = calcEMA(data, 50);
+  const { adx, plusDI, minusDI } = calcADX(data);
   
-  const body0 = Math.abs(c0.close - c0.open);
-  const body1 = Math.abs(c1.close - c1.open);
-  const range0 = c0.high - c0.low;
-  const range1 = c1.high - c1.low;
+  const le20 = ema20[ema20.length - 1];
+  const le50 = ema50[ema50.length - 1];
+  const lADX = adx[adx.length - 1];
+  const lPlus = plusDI[plusDI.length - 1];
+  const lMinus = minusDI[minusDI.length - 1];
   
-  const isBullish0 = c0.close > c0.open;
-  const isBullish1 = c1.close > c1.open;
-  
-  // Bullish engulfing
-  if (isBullish0 && !isBullish1 && c0.close > c1.open && c0.open < c1.close && body0 > body1 * 1.2) {
-    return { pattern: 'bullish_engulfing', strength: 3, type: 'bullish' };
+  // Count candles above/below EMA20
+  let above20 = 0, below20 = 0;
+  for (let i = data.length - 20; i < data.length; i++) {
+    if (data[i].close > ema20[i]) above20++;
+    else below20++;
   }
   
-  // Bearish engulfing
-  if (!isBullish0 && isBullish1 && c0.close < c1.open && c0.open > c1.close && body0 > body1 * 1.2) {
-    return { pattern: 'bearish_engulfing', strength: 3, type: 'bearish' };
+  // Higher highs / lower lows count
+  let hh = 0, ll = 0;
+  for (let i = data.length - 20; i < data.length; i++) {
+    if (i > 0 && data[i].high > data[i-1].high) hh++;
+    if (i > 0 && data[i].low < data[i-1].low) ll++;
   }
   
-  // Bullish pin bar (hammer)
-  const lowerWick0 = Math.min(c0.open, c0.close) - c0.low;
-  const upperWick0 = c0.high - Math.max(c0.open, c0.close);
-  if (lowerWick0 > body0 * 2 && upperWick0 < body0 * 0.5 && range0 > 0) {
-    return { pattern: 'bullish_pin', strength: 2, type: 'bullish' };
+  let strength = 0;
+  let direction = 'neutral';
+  
+  if (le20 > le50 && lPlus > lMinus) {
+    direction = 'bullish';
+    strength = Math.min((above20 / 20) * 50 + (lADX > 25 ? 30 : lADX) + (hh > ll ? 20 : 0), 100);
+  } else if (le20 < le50 && lMinus > lPlus) {
+    direction = 'bearish';
+    strength = Math.min((below20 / 20) * 50 + (lADX > 25 ? 30 : lADX) + (ll > hh ? 20 : 0), 100);
   }
   
-  // Bearish pin bar (shooting star)
-  if (upperWick0 > body0 * 2 && lowerWick0 < body0 * 0.5 && range0 > 0) {
-    return { pattern: 'bearish_pin', strength: 2, type: 'bearish' };
-  }
-  
-  // Strong momentum candle
-  if (isBullish0 && body0 > range0 * 0.7 && body0 > body1 * 1.5) {
-    return { pattern: 'bullish_momentum', strength: 2, type: 'bullish' };
-  }
-  if (!isBullish0 && body0 > range0 * 0.7 && body0 > body1 * 1.5) {
-    return { pattern: 'bearish_momentum', strength: 2, type: 'bearish' };
-  }
-  
-  // Three white soldiers / black crows
-  const isBullish2 = c2.close > c2.open;
-  if (isBullish0 && isBullish1 && isBullish2 && c0.close > c1.close && c1.close > c2.close) {
-    return { pattern: 'three_soldiers', strength: 3, type: 'bullish' };
-  }
-  if (!isBullish0 && !isBullish1 && !isBullish2 && c0.close < c1.close && c1.close < c2.close) {
-    return { pattern: 'three_crows', strength: 3, type: 'bearish' };
-  }
-  
-  return { pattern: 'none', strength: 0, type: 'neutral' };
+  return { strength, direction, adx: lADX, ema20: le20, ema50: le50, above20, below20 };
 };
 
-// Momentum strength (rate of change)
-const calcMomentum = (data, period = 5) => {
-  if (data.length < period + 1) return 0;
-  const current = data[data.length - 1].close;
-  const past = data[data.length - period - 1].close;
-  return ((current - past) / past) * 100;
-};
-
-// ============ SCALPING SIGNAL ANALYSIS ============
-const analyzeScalpSignals = (data, funding = 0, refBias = 'NEUTRAL') => {
-  if (data.length < 30) return { bias: 'NEUTRAL', confidence: 0, signals: [], breakdown: {}, indicators: {}, tradePlan: null, score: 0, entryQuality: 'NONE', scalpReady: false };
+// ============ SWING SIGNAL ANALYSIS ============
+const analyzeSwingSignals = (data, funding = 0, refBias = 'NEUTRAL') => {
+  if (data.length < 50) return { bias: 'NEUTRAL', confidence: 0, signals: [], breakdown: {}, indicators: {}, tradePlan: null, score: 0 };
   
-  const latest = data[data.length - 1], prev = data[data.length - 2], prev2 = data[data.length - 3];
+  const latest = data[data.length - 1];
+  const prev = data[data.length - 2];
   
-  // Fast EMAs for scalping
-  const ema5 = calcEMA(data, 5), ema13 = calcEMA(data, 13), ema21 = calcEMA(data, 21);
-  const rsi = calcRSI(data, 6); // Fast RSI
+  const ema20 = calcEMA(data, 20);
+  const ema50 = calcEMA(data, 50);
+  const ema200 = calcEMA(data, 200);
+  const rsi = calcRSI(data, 14);
   const { macd, signal: macdSig, histogram } = calcMACD(data);
-  const atr = calcATR(data, 10);
-  const vwap = calcVWAP(data);
-  const volume = analyzeVolume(data, 10);
-  const candlePattern = detectCandlePatterns(data);
-  const momentum = calcMomentum(data, 5);
+  const { adx, plusDI, minusDI } = calcADX(data);
+  const atr = calcATR(data, 14);
+  const bb = calcBB(data, 20);
+  
+  const consolidation = detectConsolidation(data, 30);
+  const breakout = detectBreakout(data, consolidation);
+  const volume = analyzeBreakoutVolume(data, 20);
+  const trend = analyzeTrendStrength(data);
   
   let bullScore = 0, bearScore = 0;
   const signals = [];
   const breakdown = { 
-    momentum: { score: 0, max: 35, signals: [] }, 
-    price_action: { score: 0, max: 30, signals: [] }, 
-    volume: { score: 0, max: 25, signals: [] },
-    context: { score: 0, max: 20, signals: [] }
+    trend: { score: 0, max: 35, signals: [] }, 
+    breakout: { score: 0, max: 35, signals: [] }, 
+    momentum: { score: 0, max: 20, signals: [] },
+    confluence: { score: 0, max: 20, signals: [] }
   };
   
-  const le5 = ema5[ema5.length - 1], le13 = ema13[ema13.length - 1], le21 = ema21[ema21.length - 1];
-  const pe5 = ema5[ema5.length - 2], pe13 = ema13[ema13.length - 2];
-  const lVWAP = vwap[vwap.length - 1];
-  const lRSI = rsi[rsi.length - 1], pRSI = rsi[rsi.length - 2];
-  const lMACD = macd[macd.length - 1], lSig = macdSig[macdSig.length - 1];
-  const lHist = histogram[histogram.length - 1], pHist = histogram[histogram.length - 2];
+  const le20 = ema20[ema20.length - 1];
+  const le50 = ema50[ema50.length - 1];
+  const le200 = ema200[ema200.length - 1];
+  const lRSI = rsi[rsi.length - 1];
+  const lMACD = macd[macd.length - 1];
+  const lSig = macdSig[macdSig.length - 1];
+  const lHist = histogram[histogram.length - 1];
+  const pHist = histogram[histogram.length - 2];
+  const lADX = adx[adx.length - 1];
   const lATR = atr[atr.length - 1];
+  const lBB = bb[bb.length - 1];
   
-  // ============ MOMENTUM (35 pts) ============
-  // EMA alignment (fast)
-  if (le5 > le13 && le13 > le21) { bullScore += 10; breakdown.momentum.score += 10; breakdown.momentum.signals.push({ type: 'bullish', text: 'EMAs stacked ↑' }); }
-  else if (le5 < le13 && le13 < le21) { bearScore += 10; breakdown.momentum.score -= 10; breakdown.momentum.signals.push({ type: 'bearish', text: 'EMAs stacked ↓' }); }
-  
-  // EMA cross (high value for scalping)
-  if (pe5 <= pe13 && le5 > le13) { bullScore += 12; breakdown.momentum.score += 12; breakdown.momentum.signals.push({ type: 'bullish', text: '⚡ EMA5/13 cross UP' }); }
-  if (pe5 >= pe13 && le5 < le13) { bearScore += 12; breakdown.momentum.score -= 12; breakdown.momentum.signals.push({ type: 'bearish', text: '⚡ EMA5/13 cross DOWN' }); }
-  
-  // RSI momentum
-  if (lRSI < 25) { bullScore += 8; breakdown.momentum.score += 8; breakdown.momentum.signals.push({ type: 'bullish', text: `RSI oversold ${lRSI.toFixed(0)}` }); }
-  else if (lRSI > 75) { bearScore += 8; breakdown.momentum.score -= 8; breakdown.momentum.signals.push({ type: 'bearish', text: `RSI overbought ${lRSI.toFixed(0)}` }); }
-  else if (lRSI > 55 && lRSI > pRSI) { bullScore += 4; breakdown.momentum.score += 4; breakdown.momentum.signals.push({ type: 'bullish', text: 'RSI rising' }); }
-  else if (lRSI < 45 && lRSI < pRSI) { bearScore += 4; breakdown.momentum.score -= 4; breakdown.momentum.signals.push({ type: 'bearish', text: 'RSI falling' }); }
-  
-  // MACD histogram momentum
-  if (lHist > 0 && lHist > pHist * 1.2) { bullScore += 6; breakdown.momentum.score += 6; breakdown.momentum.signals.push({ type: 'bullish', text: 'MACD accel ↑' }); }
-  else if (lHist < 0 && lHist < pHist * 1.2) { bearScore += 6; breakdown.momentum.score -= 6; breakdown.momentum.signals.push({ type: 'bearish', text: 'MACD accel ↓' }); }
-  
-  // Rate of change
-  if (momentum > 0.3) { bullScore += 5; breakdown.momentum.score += 5; breakdown.momentum.signals.push({ type: 'bullish', text: `Mom +${momentum.toFixed(2)}%` }); }
-  else if (momentum < -0.3) { bearScore += 5; breakdown.momentum.score -= 5; breakdown.momentum.signals.push({ type: 'bearish', text: `Mom ${momentum.toFixed(2)}%` }); }
-  
-  // ============ PRICE ACTION (30 pts) ============
-  // Candle patterns (crucial for scalping)
-  if (candlePattern.type === 'bullish') {
-    const pts = candlePattern.strength * 5;
-    bullScore += pts;
-    breakdown.price_action.score += pts;
-    breakdown.price_action.signals.push({ type: 'bullish', text: `🔥 ${candlePattern.pattern.replace('_', ' ')}` });
-  } else if (candlePattern.type === 'bearish') {
-    const pts = candlePattern.strength * 5;
-    bearScore += pts;
-    breakdown.price_action.score -= pts;
-    breakdown.price_action.signals.push({ type: 'bearish', text: `🔥 ${candlePattern.pattern.replace('_', ' ')}` });
+  // ============ TREND (35 pts) - Need strong trend for big moves ============
+  if (le20 > le50 && le50 > le200) { 
+    bullScore += 15; breakdown.trend.score += 15; 
+    breakdown.trend.signals.push({ type: 'bullish', text: '✓ EMA 20>50>200 (uptrend)' }); 
+  } else if (le20 < le50 && le50 < le200) { 
+    bearScore += 15; breakdown.trend.score -= 15; 
+    breakdown.trend.signals.push({ type: 'bearish', text: '✓ EMA 20<50<200 (downtrend)' }); 
+  } else if (le20 > le50) {
+    bullScore += 8; breakdown.trend.score += 8;
+    breakdown.trend.signals.push({ type: 'bullish', text: 'EMA 20>50' });
+  } else if (le20 < le50) {
+    bearScore += 8; breakdown.trend.score -= 8;
+    breakdown.trend.signals.push({ type: 'bearish', text: 'EMA 20<50' });
   }
   
-  // Price vs VWAP
-  if (latest.close > lVWAP && latest.low > lVWAP) { bullScore += 6; breakdown.price_action.score += 6; breakdown.price_action.signals.push({ type: 'bullish', text: 'Above VWAP' }); }
-  else if (latest.close < lVWAP && latest.high < lVWAP) { bearScore += 6; breakdown.price_action.score -= 6; breakdown.price_action.signals.push({ type: 'bearish', text: 'Below VWAP' }); }
-  
-  // Price vs fast EMA
-  if (latest.close > le5 && latest.low >= le5) { bullScore += 4; breakdown.price_action.score += 4; breakdown.price_action.signals.push({ type: 'bullish', text: 'Riding EMA5' }); }
-  else if (latest.close < le5 && latest.high <= le5) { bearScore += 4; breakdown.price_action.score -= 4; breakdown.price_action.signals.push({ type: 'bearish', text: 'Under EMA5' }); }
-  
-  // Break of recent high/low
-  const last10High = Math.max(...data.slice(-10).map(d => d.high));
-  const last10Low = Math.min(...data.slice(-10).map(d => d.low));
-  if (latest.close > last10High && latest.close > prev.high) { bullScore += 8; breakdown.price_action.score += 8; breakdown.price_action.signals.push({ type: 'bullish', text: '⚡ Break HIGH' }); }
-  if (latest.close < last10Low && latest.close < prev.low) { bearScore += 8; breakdown.price_action.score -= 8; breakdown.price_action.signals.push({ type: 'bearish', text: '⚡ Break LOW' }); }
-  
-  // ============ VOLUME (25 pts) ============
-  // Volume spike (key scalping trigger)
-  if (volume.bigSpike) {
-    if (latest.close > prev.close) { bullScore += 15; breakdown.volume.score += 15; breakdown.volume.signals.push({ type: 'bullish', text: `🚀 VOL SPIKE ${volume.relative.toFixed(1)}x` }); }
-    else { bearScore += 15; breakdown.volume.score -= 15; breakdown.volume.signals.push({ type: 'bearish', text: `🚀 VOL SPIKE ${volume.relative.toFixed(1)}x` }); }
-  } else if (volume.spike) {
-    if (latest.close > prev.close) { bullScore += 10; breakdown.volume.score += 10; breakdown.volume.signals.push({ type: 'bullish', text: `Vol spike ${volume.relative.toFixed(1)}x` }); }
-    else { bearScore += 10; breakdown.volume.score -= 10; breakdown.volume.signals.push({ type: 'bearish', text: `Vol spike ${volume.relative.toFixed(1)}x` }); }
-  } else if (volume.relative > 1.5) {
-    if (latest.close > prev.close) { bullScore += 5; breakdown.volume.score += 5; breakdown.volume.signals.push({ type: 'bullish', text: 'Good volume' }); }
-    else { bearScore += 5; breakdown.volume.score -= 5; breakdown.volume.signals.push({ type: 'bearish', text: 'Good volume' }); }
+  // ADX trend strength
+  if (lADX > 30) {
+    if (trend.direction === 'bullish') { 
+      bullScore += 12; breakdown.trend.score += 12; 
+      breakdown.trend.signals.push({ type: 'bullish', text: `Strong trend ADX ${lADX.toFixed(0)}` }); 
+    } else if (trend.direction === 'bearish') { 
+      bearScore += 12; breakdown.trend.score -= 12; 
+      breakdown.trend.signals.push({ type: 'bearish', text: `Strong trend ADX ${lADX.toFixed(0)}` }); 
+    }
+  } else if (lADX > 20) {
+    if (trend.direction === 'bullish') { bullScore += 6; breakdown.trend.score += 6; }
+    else if (trend.direction === 'bearish') { bearScore += 6; breakdown.trend.score -= 6; }
+    breakdown.trend.signals.push({ type: 'neutral', text: `Moderate trend ADX ${lADX.toFixed(0)}` });
   }
   
-  // Volume delta (buying/selling pressure)
-  if (volume.delta > 0.5) { bullScore += 6; breakdown.volume.score += 6; breakdown.volume.signals.push({ type: 'bullish', text: 'Buy pressure' }); }
-  else if (volume.delta < -0.5) { bearScore += 6; breakdown.volume.score -= 6; breakdown.volume.signals.push({ type: 'bearish', text: 'Sell pressure' }); }
+  // Price above/below key EMAs
+  if (latest.close > le20 && latest.close > le50) {
+    bullScore += 6; breakdown.trend.score += 6;
+    breakdown.trend.signals.push({ type: 'bullish', text: 'Price above EMAs' });
+  } else if (latest.close < le20 && latest.close < le50) {
+    bearScore += 6; breakdown.trend.score -= 6;
+    breakdown.trend.signals.push({ type: 'bearish', text: 'Price below EMAs' });
+  }
   
-  // Volume trend
-  if (volume.trend === 'increasing') { breakdown.volume.signals.push({ type: 'neutral', text: 'Vol increasing' }); }
+  // ============ BREAKOUT (35 pts) - Key for catching big moves ============
+  if (breakout.bullishBreakout) {
+    bullScore += 20; breakdown.breakout.score += 20;
+    breakdown.breakout.signals.push({ type: 'bullish', text: '🚀 BREAKOUT above resistance!' });
+  } else if (breakout.bearishBreakout) {
+    bearScore += 20; breakdown.breakout.score -= 20;
+    breakdown.breakout.signals.push({ type: 'bearish', text: '🚀 BREAKDOWN below support!' });
+  }
   
-  // ============ CONTEXT (20 pts) ============
-  // Reference asset alignment
-  if (refBias === 'LONG') { bullScore += 8; breakdown.context.score += 8; breakdown.context.signals.push({ type: 'bullish', text: 'Ref bullish ✓' }); }
-  else if (refBias === 'SHORT') { bearScore += 8; breakdown.context.score -= 8; breakdown.context.signals.push({ type: 'bearish', text: 'Ref bearish ✓' }); }
+  if (breakout.failedBullish) {
+    bearScore += 8; breakdown.breakout.score -= 8;
+    breakdown.breakout.signals.push({ type: 'bearish', text: '⚠ Failed breakout (bull trap)' });
+  } else if (breakout.failedBearish) {
+    bullScore += 8; breakdown.breakout.score += 8;
+    breakdown.breakout.signals.push({ type: 'bullish', text: '⚠ Failed breakdown (bear trap)' });
+  }
   
-  // Funding
+  // Volume confirmation on breakout
+  if (volume.climax) {
+    if (latest.close > prev.close) { 
+      bullScore += 15; breakdown.breakout.score += 15; 
+      breakdown.breakout.signals.push({ type: 'bullish', text: `🔥 Volume climax ${volume.relative.toFixed(1)}x` }); 
+    } else { 
+      bearScore += 15; breakdown.breakout.score -= 15; 
+      breakdown.breakout.signals.push({ type: 'bearish', text: `🔥 Volume climax ${volume.relative.toFixed(1)}x` }); 
+    }
+  } else if (volume.expanding && volume.relative > 1.5) {
+    if (latest.close > prev.close) { 
+      bullScore += 8; breakdown.breakout.score += 8; 
+      breakdown.breakout.signals.push({ type: 'bullish', text: 'Volume expanding' }); 
+    } else { 
+      bearScore += 8; breakdown.breakout.score -= 8; 
+      breakdown.breakout.signals.push({ type: 'bearish', text: 'Volume expanding' }); 
+    }
+  }
+  
+  // BB squeeze breakout
+  if (lBB.width < 0.03 && consolidation.inConsolidation) {
+    breakdown.breakout.signals.push({ type: 'neutral', text: '⚡ BB Squeeze - breakout imminent' });
+  }
+  
+  // Consolidation context
+  if (consolidation.inConsolidation) {
+    breakdown.breakout.signals.push({ type: 'neutral', text: `Range: ${consolidation.rangeSize.toFixed(1)}%` });
+  }
+  
+  // ============ MOMENTUM (20 pts) ============
+  // RSI
+  if (lRSI > 60 && lRSI < 80) { 
+    bullScore += 6; breakdown.momentum.score += 6; 
+    breakdown.momentum.signals.push({ type: 'bullish', text: `RSI ${lRSI.toFixed(0)} bullish` }); 
+  } else if (lRSI < 40 && lRSI > 20) { 
+    bearScore += 6; breakdown.momentum.score -= 6; 
+    breakdown.momentum.signals.push({ type: 'bearish', text: `RSI ${lRSI.toFixed(0)} bearish` }); 
+  } else if (lRSI >= 80) {
+    breakdown.momentum.signals.push({ type: 'neutral', text: `RSI ${lRSI.toFixed(0)} extended` });
+  } else if (lRSI <= 20) {
+    breakdown.momentum.signals.push({ type: 'neutral', text: `RSI ${lRSI.toFixed(0)} oversold` });
+  }
+  
+  // MACD
+  if (lMACD > lSig && lHist > pHist) { 
+    bullScore += 6; breakdown.momentum.score += 6; 
+    breakdown.momentum.signals.push({ type: 'bullish', text: 'MACD bullish + accelerating' }); 
+  } else if (lMACD < lSig && lHist < pHist) { 
+    bearScore += 6; breakdown.momentum.score -= 6; 
+    breakdown.momentum.signals.push({ type: 'bearish', text: 'MACD bearish + accelerating' }); 
+  } else if (lMACD > lSig) {
+    bullScore += 3; breakdown.momentum.score += 3;
+    breakdown.momentum.signals.push({ type: 'bullish', text: 'MACD above signal' });
+  } else {
+    bearScore += 3; breakdown.momentum.score -= 3;
+    breakdown.momentum.signals.push({ type: 'bearish', text: 'MACD below signal' });
+  }
+  
+  // Volume accumulation
+  if (volume.accumulationScore >= 5) {
+    bullScore += 6; breakdown.momentum.score += 6;
+    breakdown.momentum.signals.push({ type: 'bullish', text: 'Volume accumulation' });
+  } else if (volume.accumulationScore <= -5) {
+    bearScore += 6; breakdown.momentum.score -= 6;
+    breakdown.momentum.signals.push({ type: 'bearish', text: 'Volume distribution' });
+  }
+  
+  // ============ CONFLUENCE (20 pts) ============
+  if (refBias === 'LONG') { 
+    bullScore += 10; breakdown.confluence.score += 10; 
+    breakdown.confluence.signals.push({ type: 'bullish', text: 'Reference asset bullish ✓' }); 
+  } else if (refBias === 'SHORT') { 
+    bearScore += 10; breakdown.confluence.score -= 10; 
+    breakdown.confluence.signals.push({ type: 'bearish', text: 'Reference asset bearish ✓' }); 
+  }
+  
   const fundingPct = funding * 100;
-  if (fundingPct > 0.05) { bearScore += 6; breakdown.context.score -= 6; breakdown.context.signals.push({ type: 'bearish', text: 'High funding' }); }
-  else if (fundingPct < -0.05) { bullScore += 6; breakdown.context.score += 6; breakdown.context.signals.push({ type: 'bullish', text: 'Neg funding' }); }
-  
-  // Not trading into resistance/support
-  if (latest.close > last10High * 0.998 && latest.close < last10High * 1.002) {
-    breakdown.context.signals.push({ type: 'neutral', text: 'At resistance' });
+  if (fundingPct > 0.05) { 
+    bearScore += 6; breakdown.confluence.score -= 6; 
+    breakdown.confluence.signals.push({ type: 'bearish', text: `High funding ${fundingPct.toFixed(3)}% (crowded long)` }); 
+  } else if (fundingPct < -0.03) { 
+    bullScore += 6; breakdown.confluence.score += 6; 
+    breakdown.confluence.signals.push({ type: 'bullish', text: `Neg funding ${fundingPct.toFixed(3)}%` }); 
   }
   
   Object.values(breakdown).forEach(c => c.signals.forEach(s => signals.push(s)));
   const totalScore = bullScore - bearScore;
   
   let bias = 'NEUTRAL'; 
-  if (totalScore >= 12) bias = 'LONG'; 
-  else if (totalScore <= -12) bias = 'SHORT';
+  if (totalScore >= 20) bias = 'LONG'; 
+  else if (totalScore <= -20) bias = 'SHORT';
   
-  // ============ SCALP ENTRY QUALITY ============
+  // ============ ENTRY QUALITY FOR BIG MOVES ============
   let entryQuality = 'NONE';
   let qualityReasons = [];
-  let scalpReady = false;
+  let swingReady = false;
   
   if (bias !== 'NEUTRAL') {
     let qualityScore = 0;
     
     if (bias === 'LONG') {
-      if (candlePattern.type === 'bullish') { qualityScore += 3; qualityReasons.push(candlePattern.pattern.replace('_', ' ')); }
-      if (volume.relative >= 2) { qualityScore += 2; qualityReasons.push('Volume spike'); }
-      if (volume.delta > 0.3) { qualityScore += 1; qualityReasons.push('Buy pressure'); }
-      if (le5 > le13) { qualityScore += 1; qualityReasons.push('EMA aligned'); }
-      if (latest.close > lVWAP) { qualityScore += 1; qualityReasons.push('Above VWAP'); }
-      if (lRSI > 50 && lRSI < 70) { qualityScore += 1; qualityReasons.push('RSI OK'); }
-      if (refBias === 'LONG') { qualityScore += 2; qualityReasons.push('Ref aligned'); }
-      if (momentum > 0.2) { qualityScore += 1; qualityReasons.push('Momentum'); }
-      if (latest.close > prev.close && prev.close > prev2.close) { qualityScore += 1; qualityReasons.push('3 green'); }
+      if (breakout.bullishBreakout) { qualityScore += 3; qualityReasons.push('Breakout'); }
+      if (volume.climax || (volume.expanding && volume.relative > 2)) { qualityScore += 3; qualityReasons.push('Volume surge'); }
+      if (trend.direction === 'bullish' && trend.strength > 60) { qualityScore += 2; qualityReasons.push('Strong trend'); }
+      if (lADX > 25) { qualityScore += 2; qualityReasons.push('ADX trending'); }
+      if (le20 > le50 && le50 > le200) { qualityScore += 2; qualityReasons.push('EMA aligned'); }
+      if (lRSI > 50 && lRSI < 75) { qualityScore += 1; qualityReasons.push('RSI room'); }
+      if (refBias === 'LONG') { qualityScore += 2; qualityReasons.push('BTC aligned'); }
+      if (lMACD > lSig && lHist > 0) { qualityScore += 1; qualityReasons.push('MACD +'); }
     } else {
-      if (candlePattern.type === 'bearish') { qualityScore += 3; qualityReasons.push(candlePattern.pattern.replace('_', ' ')); }
-      if (volume.relative >= 2) { qualityScore += 2; qualityReasons.push('Volume spike'); }
-      if (volume.delta < -0.3) { qualityScore += 1; qualityReasons.push('Sell pressure'); }
-      if (le5 < le13) { qualityScore += 1; qualityReasons.push('EMA aligned'); }
-      if (latest.close < lVWAP) { qualityScore += 1; qualityReasons.push('Below VWAP'); }
-      if (lRSI < 50 && lRSI > 30) { qualityScore += 1; qualityReasons.push('RSI OK'); }
-      if (refBias === 'SHORT') { qualityScore += 2; qualityReasons.push('Ref aligned'); }
-      if (momentum < -0.2) { qualityScore += 1; qualityReasons.push('Momentum'); }
-      if (latest.close < prev.close && prev.close < prev2.close) { qualityScore += 1; qualityReasons.push('3 red'); }
+      if (breakout.bearishBreakout) { qualityScore += 3; qualityReasons.push('Breakdown'); }
+      if (volume.climax || (volume.expanding && volume.relative > 2)) { qualityScore += 3; qualityReasons.push('Volume surge'); }
+      if (trend.direction === 'bearish' && trend.strength > 60) { qualityScore += 2; qualityReasons.push('Strong trend'); }
+      if (lADX > 25) { qualityScore += 2; qualityReasons.push('ADX trending'); }
+      if (le20 < le50 && le50 < le200) { qualityScore += 2; qualityReasons.push('EMA aligned'); }
+      if (lRSI < 50 && lRSI > 25) { qualityScore += 1; qualityReasons.push('RSI room'); }
+      if (refBias === 'SHORT') { qualityScore += 2; qualityReasons.push('BTC aligned'); }
+      if (lMACD < lSig && lHist < 0) { qualityScore += 1; qualityReasons.push('MACD -'); }
     }
     
-    if (qualityScore >= 8) { entryQuality = 'A+'; scalpReady = true; }
-    else if (qualityScore >= 6) { entryQuality = 'A'; scalpReady = true; }
-    else if (qualityScore >= 4) entryQuality = 'B';
-    else if (qualityScore >= 2) entryQuality = 'C';
+    if (qualityScore >= 10) { entryQuality = 'A+'; swingReady = true; }
+    else if (qualityScore >= 7) { entryQuality = 'A'; swingReady = true; }
+    else if (qualityScore >= 5) entryQuality = 'B';
+    else if (qualityScore >= 3) entryQuality = 'C';
   }
   
-  // Trade filters for scalping
-  let shouldTrade = scalpReady;
+  // Filters
+  let shouldTrade = swingReady;
   let noTradeReason = '';
-  if (volume.relative < 0.8) { shouldTrade = false; noTradeReason = 'Volume too low'; }
-  if (lATR < latest.close * 0.0005) { shouldTrade = false; noTradeReason = 'Volatility too low'; }
-  if (Math.abs(totalScore) < 15 && !volume.spike) { shouldTrade = false; noTradeReason = 'Weak signal'; }
+  if (lADX < 20 && !breakout.bullishBreakout && !breakout.bearishBreakout) { shouldTrade = false; noTradeReason = 'No trend, no breakout'; }
+  if (volume.relative < 1.0 && !breakout.bullishBreakout && !breakout.bearishBreakout) { shouldTrade = false; noTradeReason = 'Low volume'; }
+  if (Math.abs(totalScore) < 25) { shouldTrade = false; noTradeReason = 'Weak conviction'; }
   
-  // ============ SCALP TRADE PLAN ============
+  // ============ SWING TRADE PLAN - BIGGER TARGETS ============
   let tradePlan = null;
   if (bias !== 'NEUTRAL') {
     const price = latest.close;
     
     if (bias === 'LONG') {
       const entry = price;
-      const stopLoss = Math.max(latest.low - lATR * 0.5, le13 - lATR * 0.3);
+      // Wider stop below structure
+      const stopLoss = Math.min(consolidation.support - lATR * 0.5, le50 - lATR);
       const risk = entry - stopLoss;
+      const riskPercent = (risk / entry) * 100;
+      
       tradePlan = {
         direction: 'LONG',
-        entry: entry,
+        entry,
         stopLoss,
-        tp1: entry + risk * 1.0,  // 1R
-        tp2: entry + risk * 1.5,  // 1.5R
-        tp3: entry + risk * 2.0,  // 2R (runner)
-        breakeven: entry + risk * 0.5, // Move to BE after 0.5R
-        riskPercent: ((risk / entry) * 100).toFixed(3),
-        atr: lATR,
-        maxHold: '10-15 min'
+        // Big targets for 40%+ moves (with leverage)
+        tp1: entry + risk * 3,   // 3R
+        tp2: entry + risk * 5,   // 5R  
+        tp3: entry + risk * 8,   // 8R
+        tp4: entry + risk * 12,  // 12R (let it run)
+        trailStop: entry + risk * 1.5, // Start trailing after 1.5R
+        riskPercent: riskPercent.toFixed(2),
+        riskR: risk,
+        potentialGain: `${(riskPercent * 5).toFixed(1)}% - ${(riskPercent * 12).toFixed(1)}%`,
+        leverage: `10x = ${(riskPercent * 10 * 5).toFixed(0)}% - ${(riskPercent * 10 * 12).toFixed(0)}%`,
+        atr: lATR
       };
     } else {
       const entry = price;
-      const stopLoss = Math.min(latest.high + lATR * 0.5, le13 + lATR * 0.3);
+      const stopLoss = Math.max(consolidation.resistance + lATR * 0.5, le50 + lATR);
       const risk = stopLoss - entry;
+      const riskPercent = (risk / entry) * 100;
+      
       tradePlan = {
         direction: 'SHORT',
-        entry: entry,
+        entry,
         stopLoss,
-        tp1: entry - risk * 1.0,
-        tp2: entry - risk * 1.5,
-        tp3: entry - risk * 2.0,
-        breakeven: entry - risk * 0.5,
-        riskPercent: ((risk / entry) * 100).toFixed(3),
-        atr: lATR,
-        maxHold: '10-15 min'
+        tp1: entry - risk * 3,
+        tp2: entry - risk * 5,
+        tp3: entry - risk * 8,
+        tp4: entry - risk * 12,
+        trailStop: entry - risk * 1.5,
+        riskPercent: riskPercent.toFixed(2),
+        riskR: risk,
+        potentialGain: `${(riskPercent * 5).toFixed(1)}% - ${(riskPercent * 12).toFixed(1)}%`,
+        leverage: `10x = ${(riskPercent * 10 * 5).toFixed(0)}% - ${(riskPercent * 10 * 12).toFixed(0)}%`,
+        atr: lATR
       };
     }
   }
   
   return { 
-    bias, confidence: Math.min(Math.abs(totalScore) * 2, 100).toFixed(0), 
+    bias, 
+    confidence: Math.min(Math.abs(totalScore), 100).toFixed(0), 
     bullScore, bearScore, signals, breakdown, shouldTrade, noTradeReason, tradePlan, score: totalScore,
-    volume, candlePattern, entryQuality, qualityReasons, scalpReady, momentum,
-    indicators: { rsi: lRSI, macd: lMACD, macdSignal: lSig, atr: lATR, vwap: lVWAP, ema5: le5, ema13: le13, price: latest.close } 
+    consolidation, breakout, volume, trend, entryQuality, qualityReasons, swingReady,
+    indicators: { rsi: lRSI, macd: lMACD, macdSignal: lSig, adx: lADX, atr: lATR, ema20: le20, ema50: le50, bbWidth: lBB.width * 100, price: latest.close } 
   };
 };
 
-// ============ SCALPING BACKTEST ============
-const runScalpBacktest = (data, initialCapital = 10000) => {
+// ============ SWING BACKTEST - TRAILING STOPS ============
+const runSwingBacktest = (data, initialCapital = 10000) => {
   if (data.length < 100) return null;
   
   const trades = [];
@@ -434,68 +554,70 @@ const runScalpBacktest = (data, initialCapital = 10000) => {
   let maxDrawdown = 0;
   let skippedTrades = 0;
   
-  for (let i = 30; i < data.length - 1; i++) {
+  for (let i = 50; i < data.length - 1; i++) {
     const slice = data.slice(0, i + 1);
-    const analysis = analyzeScalpSignals(slice, 0, 'NEUTRAL');
+    const analysis = analyzeSwingSignals(slice, 0, 'NEUTRAL');
     const currentCandle = data[i];
     const nextCandle = data[i + 1];
     
-    // Exit logic (SCALP - fast exits)
+    // Exit logic with trailing stop
     if (position) {
       let exitPrice = null;
       let exitReason = '';
       
+      // Update trailing stop
       if (position.direction === 'LONG') {
-        // Stop loss
+        const unrealizedR = (nextCandle.high - position.entry) / position.riskR;
+        if (unrealizedR > 1.5 && !position.trailing) {
+          position.trailing = true;
+          position.stopLoss = position.entry + position.riskR * 0.5; // Lock in 0.5R
+        }
+        if (position.trailing) {
+          // Trail stop at 2 ATR below recent high
+          const newTrail = Math.max(...data.slice(i - 5, i + 1).map(d => d.high)) - position.atr * 2;
+          if (newTrail > position.stopLoss) position.stopLoss = newTrail;
+        }
+        
+        // Check exits
         if (nextCandle.low <= position.stopLoss) { 
           exitPrice = position.stopLoss; 
-          exitReason = 'Stop'; 
+          exitReason = position.trailing ? 'Trail Stop' : 'Stop'; 
         }
-        // TP2 (main target for scalp)
-        else if (nextCandle.high >= position.tp2) { 
-          exitPrice = position.tp2; 
-          exitReason = 'TP2'; 
+        else if (nextCandle.high >= position.tp3) { 
+          exitPrice = position.tp3; 
+          exitReason = 'TP3 (8R)'; 
         }
-        // TP1 hit - move to breakeven
-        else if (nextCandle.high >= position.tp1 && !position.tp1Hit) { 
-          position.tp1Hit = true; 
-          position.stopLoss = position.entry + (position.entry - position.originalStop) * 0.1; // Small profit lock
-        }
-        // Momentum reversal exit
-        else if (analysis.bias === 'SHORT' && analysis.score <= -15) { 
+        else if (analysis.bias === 'SHORT' && analysis.score <= -25) { 
           exitPrice = nextCandle.open; 
           exitReason = 'Reversal'; 
-        }
-        // EMA cross against
-        else if (analysis.indicators.ema5 < analysis.indicators.ema13 && position.tp1Hit) {
-          exitPrice = nextCandle.open;
-          exitReason = 'EMA flip';
         }
       } else { // SHORT
+        const unrealizedR = (position.entry - nextCandle.low) / position.riskR;
+        if (unrealizedR > 1.5 && !position.trailing) {
+          position.trailing = true;
+          position.stopLoss = position.entry - position.riskR * 0.5;
+        }
+        if (position.trailing) {
+          const newTrail = Math.min(...data.slice(i - 5, i + 1).map(d => d.low)) + position.atr * 2;
+          if (newTrail < position.stopLoss) position.stopLoss = newTrail;
+        }
+        
         if (nextCandle.high >= position.stopLoss) { 
           exitPrice = position.stopLoss; 
-          exitReason = 'Stop'; 
+          exitReason = position.trailing ? 'Trail Stop' : 'Stop'; 
         }
-        else if (nextCandle.low <= position.tp2) { 
-          exitPrice = position.tp2; 
-          exitReason = 'TP2'; 
+        else if (nextCandle.low <= position.tp3) { 
+          exitPrice = position.tp3; 
+          exitReason = 'TP3 (8R)'; 
         }
-        else if (nextCandle.low <= position.tp1 && !position.tp1Hit) { 
-          position.tp1Hit = true; 
-          position.stopLoss = position.entry - (position.originalStop - position.entry) * 0.1;
-        }
-        else if (analysis.bias === 'LONG' && analysis.score >= 15) { 
+        else if (analysis.bias === 'LONG' && analysis.score >= 25) { 
           exitPrice = nextCandle.open; 
           exitReason = 'Reversal'; 
-        }
-        else if (analysis.indicators.ema5 > analysis.indicators.ema13 && position.tp1Hit) {
-          exitPrice = nextCandle.open;
-          exitReason = 'EMA flip';
         }
       }
       
-      // Time-based exit (max 15 candles = 15 min on 1m)
-      if (!exitPrice && i - position.entryIndex >= 15) { 
+      // Max hold 100 candles (longer for swing)
+      if (!exitPrice && i - position.entryIndex > 100) { 
         exitPrice = nextCandle.close; 
         exitReason = 'Time'; 
       }
@@ -504,8 +626,7 @@ const runScalpBacktest = (data, initialCapital = 10000) => {
         const pnl = position.direction === 'LONG' 
           ? (exitPrice - position.entry) * position.size 
           : (position.entry - exitPrice) * position.size;
-        const riskAmount = Math.abs(position.entry - position.originalStop) * position.size;
-        const rMultiple = pnl / riskAmount;
+        const rMultiple = pnl / (position.riskR * position.size);
         capital += pnl;
         maxCapital = Math.max(maxCapital, capital);
         maxDrawdown = Math.max(maxDrawdown, ((maxCapital - capital) / maxCapital) * 100);
@@ -523,22 +644,16 @@ const runScalpBacktest = (data, initialCapital = 10000) => {
       }
     }
     
-    // Entry logic (SCALP - need strong signals)
-    if (!position && analysis.tradePlan && analysis.scalpReady) {
+    // Entry - only A+ and A setups
+    if (!position && analysis.tradePlan && analysis.swingReady) {
       const validEntry = 
         analysis.shouldTrade &&
-        Math.abs(analysis.score) >= 15 &&
-        (analysis.entryQuality === 'A+' || analysis.entryQuality === 'A') &&
-        analysis.volume.relative >= 1.2;
+        Math.abs(analysis.score) >= 25 &&
+        (analysis.entryQuality === 'A+' || analysis.entryQuality === 'A');
       
-      // Candle confirmation
-      const candleConfirm = analysis.bias === 'LONG' 
-        ? (currentCandle.close > currentCandle.open) 
-        : (currentCandle.close < currentCandle.open);
-      
-      if (validEntry && candleConfirm) {
+      if (validEntry) {
         const plan = analysis.tradePlan;
-        const riskPerTrade = capital * 0.005; // 0.5% risk for scalping
+        const riskPerTrade = capital * 0.02; // 2% risk for swing
         const stopDistance = Math.abs(currentCandle.close - plan.stopLoss);
         const positionSize = riskPerTrade / stopDistance;
         
@@ -549,33 +664,30 @@ const runScalpBacktest = (data, initialCapital = 10000) => {
           originalStop: plan.stopLoss,
           tp1: plan.tp1,
           tp2: plan.tp2,
-          tp1Hit: false,
+          tp3: plan.tp3,
+          riskR: plan.riskR,
+          atr: plan.atr,
+          trailing: false,
           entryIndex: i,
           size: positionSize,
           quality: analysis.entryQuality
         };
-      } else if (Math.abs(analysis.score) >= 12) {
+      } else if (Math.abs(analysis.score) >= 20) {
         skippedTrades++;
       }
     }
   }
   
-  // Close any open position
+  // Close open position
   if (position) {
     const lastPrice = data[data.length - 1].close;
     const pnl = position.direction === 'LONG' 
       ? (lastPrice - position.entry) * position.size 
       : (position.entry - lastPrice) * position.size;
-    const riskAmount = Math.abs(position.entry - position.originalStop) * position.size;
+    const rMultiple = pnl / (position.riskR * position.size);
     trades.push({ 
-      direction: position.direction, 
-      entry: position.entry, 
-      exit: lastPrice, 
-      pnl, 
-      pnlPercent: pnl / riskAmount, 
-      reason: 'End',
-      duration: data.length - position.entryIndex,
-      quality: position.quality 
+      direction: position.direction, entry: position.entry, exit: lastPrice, 
+      pnl, pnlPercent: rMultiple, reason: 'End', duration: data.length - position.entryIndex, quality: position.quality 
     });
     capital += pnl;
   }
@@ -583,13 +695,11 @@ const runScalpBacktest = (data, initialCapital = 10000) => {
   const wins = trades.filter(t => t.pnl > 0), losses = trades.filter(t => t.pnl <= 0);
   const totalWins = wins.reduce((a, t) => a + t.pnl, 0);
   const totalLosses = Math.abs(losses.reduce((a, t) => a + t.pnl, 0));
-  const avgDuration = trades.length > 0 ? (trades.reduce((a, t) => a + t.duration, 0) / trades.length).toFixed(1) : 0;
+  const avgDuration = trades.length > 0 ? (trades.reduce((a, t) => a + t.duration, 0) / trades.length).toFixed(0) : 0;
+  const bigWins = trades.filter(t => t.pnlPercent >= 3).length;
   
   return {
-    totalTrades: trades.length,
-    winningTrades: wins.length,
-    losingTrades: losses.length,
-    skippedTrades,
+    totalTrades: trades.length, winningTrades: wins.length, losingTrades: losses.length, skippedTrades, bigWins,
     winRate: trades.length > 0 ? ((wins.length / trades.length) * 100).toFixed(1) : 0,
     avgWin: wins.length > 0 ? (wins.reduce((a, t) => a + t.pnlPercent, 0) / wins.length).toFixed(2) : 0,
     avgLoss: losses.length > 0 ? (losses.reduce((a, t) => a + t.pnlPercent, 0) / losses.length).toFixed(2) : 0,
@@ -609,196 +719,220 @@ const Badge = ({ label, value, status }) => {
 };
 
 const StatBox = ({ label, value, color = '#fff', highlight = false }) => (
-  <div style={{ background: highlight ? 'rgba(16,185,129,0.1)' : '#0a0a0a', border: `1px solid ${highlight ? '#10b981' : '#1a1a1a'}`, padding: '6px', textAlign: 'center' }}>
-    <div style={{ fontSize: '7px', color: '#666', letterSpacing: '1px' }}>{label}</div>
-    <div style={{ fontSize: '13px', fontWeight: '600', color }}>{value}</div>
+  <div style={{ background: highlight ? 'rgba(16,185,129,0.15)' : '#0a0a0a', border: `1px solid ${highlight ? '#10b981' : '#1a1a1a'}`, padding: '8px', textAlign: 'center' }}>
+    <div style={{ fontSize: '8px', color: '#666', letterSpacing: '1px' }}>{label}</div>
+    <div style={{ fontSize: '14px', fontWeight: '600', color }}>{value}</div>
   </div>
 );
 
 const SignalBox = ({ analysis, timeframe }) => (
-  <div style={{ background: analysis.bias === 'LONG' ? 'rgba(16,185,129,0.1)' : analysis.bias === 'SHORT' ? 'rgba(239,68,68,0.1)' : 'rgba(50,50,50,0.3)', border: `2px solid ${analysis.bias === 'LONG' ? '#10b981' : analysis.bias === 'SHORT' ? '#ef4444' : '#444'}`, padding: '8px', textAlign: 'center' }}>
-    <div style={{ fontSize: '8px', color: '#888', letterSpacing: '1px', marginBottom: '2px' }}>{timeframe}</div>
-    <div style={{ fontSize: '28px', fontWeight: '700', color: analysis.bias === 'LONG' ? '#10b981' : analysis.bias === 'SHORT' ? '#ef4444' : '#666' }}>{analysis.bias}</div>
-    <div style={{ fontSize: '10px', color: '#666', marginTop: '2px' }}>{analysis.score > 0 ? '+' : ''}{analysis.score} pts</div>
-    {analysis.scalpReady && (
-      <div style={{ marginTop: '4px', background: analysis.entryQuality === 'A+' ? '#10b981' : '#3b82f6', color: '#000', padding: '3px 8px', fontSize: '10px', fontWeight: '700', display: 'inline-block' }}>
-        SCALP {analysis.entryQuality}
+  <div style={{ background: analysis.bias === 'LONG' ? 'rgba(16,185,129,0.1)' : analysis.bias === 'SHORT' ? 'rgba(239,68,68,0.1)' : 'rgba(50,50,50,0.3)', border: `2px solid ${analysis.bias === 'LONG' ? '#10b981' : analysis.bias === 'SHORT' ? '#ef4444' : '#444'}`, padding: '12px', textAlign: 'center' }}>
+    <div style={{ fontSize: '9px', color: '#888', letterSpacing: '1px', marginBottom: '4px' }}>{timeframe}</div>
+    <div style={{ fontSize: '32px', fontWeight: '700', color: analysis.bias === 'LONG' ? '#10b981' : analysis.bias === 'SHORT' ? '#ef4444' : '#666' }}>{analysis.bias}</div>
+    <div style={{ fontSize: '11px', color: '#666', marginTop: '4px' }}>{analysis.score > 0 ? '+' : ''}{analysis.score} pts • {analysis.confidence}%</div>
+    {analysis.swingReady && (
+      <div style={{ marginTop: '6px', background: analysis.entryQuality === 'A+' ? '#10b981' : '#3b82f6', color: '#000', padding: '4px 10px', fontSize: '11px', fontWeight: '700', display: 'inline-block' }}>
+        {analysis.entryQuality} SETUP
       </div>
     )}
   </div>
 );
 
 // ============ ASSET PAGE ============
-const AssetPage = ({ symbol, name, data1m, data5m, refData, funding, refName }) => {
+const AssetPage = ({ symbol, name, data5m, data15m, refData, funding, refName }) => {
   const [backtest, setBacktest] = useState(null);
   const [showBacktest, setShowBacktest] = useState(false);
   
-  const refAnalysis = useMemo(() => analyzeScalpSignals(refData, 0, 'NEUTRAL'), [refData]);
-  const analysis1m = useMemo(() => analyzeScalpSignals(data1m, funding, refAnalysis.bias), [data1m, funding, refAnalysis.bias]);
-  const analysis5m = useMemo(() => analyzeScalpSignals(data5m, funding, refAnalysis.bias), [data5m, funding, refAnalysis.bias]);
+  const refAnalysis = useMemo(() => analyzeSwingSignals(refData, 0, 'NEUTRAL'), [refData]);
+  const analysis5m = useMemo(() => analyzeSwingSignals(data5m, funding, refAnalysis.bias), [data5m, funding, refAnalysis.bias]);
+  const analysis15m = useMemo(() => analyzeSwingSignals(data15m, funding, refAnalysis.bias), [data15m, funding, refAnalysis.bias]);
   
-  // For scalping, 1m is primary, 5m is just context
-  const mtfConfirmed = analysis1m.bias !== 'NEUTRAL' && (analysis5m.bias === analysis1m.bias || analysis5m.bias === 'NEUTRAL');
+  // Both timeframes should agree for big moves
+  const mtfConfirmed = analysis5m.bias !== 'NEUTRAL' && analysis15m.bias === analysis5m.bias;
   
   const handleRunBacktest = () => {
-    const result = runScalpBacktest(data1m);
+    const result = runSwingBacktest(data5m);
     setBacktest(result);
     setShowBacktest(true);
   };
   
-  const isScalpSetup = analysis1m.scalpReady && mtfConfirmed;
-  const price = data1m.length > 0 ? data1m[data1m.length - 1].close : 0;
-  const priceChange = data1m.length > 1 ? ((data1m[data1m.length - 1].close - data1m[data1m.length - 2].close) / data1m[data1m.length - 2].close) * 100 : 0;
+  const isSwingSetup = analysis5m.swingReady && mtfConfirmed;
+  const price = data5m.length > 0 ? data5m[data5m.length - 1].close : 0;
+  const priceChange = data5m.length > 1 ? ((data5m[data5m.length - 1].close - data5m[0].close) / data5m[0].close) * 100 : 0;
 
   return (
     <div>
       {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <span style={{ fontSize: '18px', fontWeight: '700' }}>{name} SCALP</span>
-          {isScalpSetup && <span style={{ background: '#10b981', color: '#000', padding: '2px 8px', fontSize: '9px', fontWeight: '700', animation: 'pulse 1s infinite' }}>⚡ READY</span>}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span style={{ fontSize: '20px', fontWeight: '700' }}>{name} SWING</span>
+          {isSwingSetup && <span style={{ background: '#10b981', color: '#000', padding: '3px 10px', fontSize: '10px', fontWeight: '700', animation: 'pulse 1s infinite' }}>⚡ {analysis5m.entryQuality} SETUP</span>}
         </div>
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px' }}>
-          <span style={{ fontSize: '18px', fontWeight: '600' }}>${price?.toFixed(symbol === 'BTCUSDT' ? 0 : 3)}</span>
-          <span style={{ color: priceChange >= 0 ? '#10b981' : '#ef4444', fontSize: '10px' }}>{priceChange >= 0 ? '▲' : '▼'}{Math.abs(priceChange).toFixed(3)}%</span>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
+          <span style={{ fontSize: '20px', fontWeight: '600' }}>${price?.toFixed(symbol === 'BTCUSDT' ? 0 : 2)}</span>
+          <span style={{ color: priceChange >= 0 ? '#10b981' : '#ef4444', fontSize: '11px' }}>{priceChange >= 0 ? '▲' : '▼'}{Math.abs(priceChange).toFixed(2)}% (500 candles)</span>
         </div>
       </div>
       
-      {/* SCALP ALERT */}
-      {isScalpSetup && (
-        <div style={{ background: analysis1m.bias === 'LONG' ? 'rgba(16,185,129,0.3)' : 'rgba(239,68,68,0.3)', border: `2px solid ${analysis1m.bias === 'LONG' ? '#10b981' : '#ef4444'}`, padding: '12px', marginBottom: '8px', textAlign: 'center' }}>
-          <span style={{ color: analysis1m.bias === 'LONG' ? '#10b981' : '#ef4444', fontWeight: '700', fontSize: '16px' }}>
-            ⚡ SCALP {analysis1m.bias} — {analysis1m.entryQuality} Setup
+      {/* BIG MOVE ALERT */}
+      {isSwingSetup && (
+        <div style={{ background: analysis5m.bias === 'LONG' ? 'rgba(16,185,129,0.3)' : 'rgba(239,68,68,0.3)', border: `2px solid ${analysis5m.bias === 'LONG' ? '#10b981' : '#ef4444'}`, padding: '15px', marginBottom: '10px', textAlign: 'center' }}>
+          <div style={{ color: analysis5m.bias === 'LONG' ? '#10b981' : '#ef4444', fontWeight: '700', fontSize: '18px' }}>
+            🚀 HIGH CONVICTION {analysis5m.bias}
+          </div>
+          <div style={{ color: '#fff', fontSize: '12px', marginTop: '6px' }}>
+            {analysis5m.qualityReasons?.join(' • ')}
+          </div>
+          {analysis5m.tradePlan && (
+            <div style={{ color: '#888', fontSize: '11px', marginTop: '6px' }}>
+              Potential: {analysis5m.tradePlan.leverage}
+            </div>
+          )}
+        </div>
+      )}
+      
+      {/* Breakout Alert */}
+      {(analysis5m.breakout?.bullishBreakout || analysis5m.breakout?.bearishBreakout) && (
+        <div style={{ background: analysis5m.breakout.bullishBreakout ? 'rgba(16,185,129,0.2)' : 'rgba(239,68,68,0.2)', border: `1px solid ${analysis5m.breakout.bullishBreakout ? '#10b981' : '#ef4444'}`, padding: '10px', marginBottom: '10px', textAlign: 'center' }}>
+          <span style={{ color: analysis5m.breakout.bullishBreakout ? '#10b981' : '#ef4444', fontWeight: '700', fontSize: '14px' }}>
+            🔥 {analysis5m.breakout.bullishBreakout ? 'BREAKOUT' : 'BREAKDOWN'} DETECTED
           </span>
-          <div style={{ color: '#888', fontSize: '10px', marginTop: '4px' }}>
-            {analysis1m.qualityReasons?.join(' • ')}
-          </div>
         </div>
       )}
       
-      {/* 5m Context Warning */}
-      {analysis1m.bias !== 'NEUTRAL' && analysis5m.bias !== 'NEUTRAL' && analysis5m.bias !== analysis1m.bias && (
-        <div style={{ background: 'rgba(245,158,11,0.2)', border: '1px solid #f59e0b', padding: '8px', marginBottom: '8px', textAlign: 'center' }}>
-          <span style={{ color: '#f59e0b', fontWeight: '600', fontSize: '10px' }}>⚠️ 5M AGAINST — Higher timeframe disagrees, be cautious</span>
-        </div>
-      )}
-      
-      {/* Charts - 1M PRIMARY */}
-      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '8px', marginBottom: '8px' }}>
-        <div style={{ background: '#0a0a0a', border: `2px solid ${analysis1m.scalpReady ? '#10b981' : '#1a1a1a'}`, padding: '4px' }}>
-          <div style={{ fontSize: '9px', color: analysis1m.scalpReady ? '#10b981' : '#666', marginBottom: '2px', display: 'flex', justifyContent: 'space-between', fontWeight: '600' }}>
-            <span>1M — PRIMARY</span>
-            <span>{analysis1m.bias} [{analysis1m.entryQuality}] ({analysis1m.score > 0 ? '+' : ''}{analysis1m.score})</span>
-          </div>
-          <Chart interval="1m" symbol={symbol} />
-        </div>
-        <div style={{ background: '#0a0a0a', border: '1px solid #1a1a1a', padding: '4px' }}>
-          <div style={{ fontSize: '8px', color: '#666', marginBottom: '2px', display: 'flex', justifyContent: 'space-between' }}>
-            <span>5M — CONTEXT</span>
-            <span style={{ color: analysis5m.bias === 'LONG' ? '#10b981' : analysis5m.bias === 'SHORT' ? '#ef4444' : '#666' }}>{analysis5m.bias}</span>
+      {/* Charts */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '10px' }}>
+        <div style={{ background: '#0a0a0a', border: `2px solid ${analysis5m.swingReady ? '#10b981' : '#1a1a1a'}`, padding: '6px' }}>
+          <div style={{ fontSize: '10px', color: analysis5m.swingReady ? '#10b981' : '#666', marginBottom: '4px', display: 'flex', justifyContent: 'space-between', fontWeight: '600' }}>
+            <span>5M</span>
+            <span>{analysis5m.bias} [{analysis5m.entryQuality}] ({analysis5m.score > 0 ? '+' : ''}{analysis5m.score})</span>
           </div>
           <Chart interval="5m" symbol={symbol} />
+        </div>
+        <div style={{ background: '#0a0a0a', border: `2px solid ${analysis15m.swingReady ? '#10b981' : '#1a1a1a'}`, padding: '6px' }}>
+          <div style={{ fontSize: '10px', color: analysis15m.swingReady ? '#10b981' : '#666', marginBottom: '4px', display: 'flex', justifyContent: 'space-between', fontWeight: '600' }}>
+            <span>15M</span>
+            <span>{analysis15m.bias} [{analysis15m.entryQuality}] ({analysis15m.score > 0 ? '+' : ''}{analysis15m.score})</span>
+          </div>
+          <Chart interval="15m" symbol={symbol} />
         </div>
       </div>
       
       {/* Main Grid */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 220px', gap: '8px' }}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          {/* Key Stats for Scalping */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: '6px' }}>
-            <StatBox label="VOL" value={`${analysis1m.volume?.relative?.toFixed(1) || '1.0'}x`} color={analysis1m.volume?.relative >= 2 ? '#10b981' : analysis1m.volume?.relative >= 1.2 ? '#3b82f6' : '#666'} highlight={analysis1m.volume?.spike} />
-            <StatBox label="DELTA" value={analysis1m.volume?.delta?.toFixed(2) || '0'} color={analysis1m.volume?.delta > 0.3 ? '#10b981' : analysis1m.volume?.delta < -0.3 ? '#ef4444' : '#666'} />
-            <StatBox label="MOM" value={`${analysis1m.momentum?.toFixed(2) || '0'}%`} color={analysis1m.momentum > 0.2 ? '#10b981' : analysis1m.momentum < -0.2 ? '#ef4444' : '#666'} />
-            <StatBox label="RSI6" value={analysis1m.indicators?.rsi?.toFixed(0) || '--'} color={analysis1m.indicators?.rsi < 30 ? '#10b981' : analysis1m.indicators?.rsi > 70 ? '#ef4444' : '#888'} />
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 260px', gap: '10px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          {/* Stats */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: '8px' }}>
+            <StatBox label="TREND" value={analysis5m.trend?.direction?.toUpperCase().slice(0,4) || 'NEUT'} color={analysis5m.trend?.direction === 'bullish' ? '#10b981' : analysis5m.trend?.direction === 'bearish' ? '#ef4444' : '#666'} highlight={analysis5m.trend?.strength > 60} />
+            <StatBox label="STRENGTH" value={`${analysis5m.trend?.strength?.toFixed(0) || 0}%`} color={analysis5m.trend?.strength > 60 ? '#10b981' : '#666'} />
+            <StatBox label="VOLUME" value={`${analysis5m.volume?.relative?.toFixed(1) || '1.0'}x`} color={analysis5m.volume?.climax ? '#10b981' : analysis5m.volume?.relative > 1.5 ? '#3b82f6' : '#666'} highlight={analysis5m.volume?.climax} />
+            <StatBox label="ADX" value={analysis5m.indicators?.adx?.toFixed(0) || '--'} color={analysis5m.indicators?.adx > 30 ? '#10b981' : analysis5m.indicators?.adx > 20 ? '#3b82f6' : '#666'} />
             <StatBox label={refName} value={refAnalysis.bias} color={refAnalysis.bias === 'LONG' ? '#10b981' : refAnalysis.bias === 'SHORT' ? '#ef4444' : '#666'} />
-            <StatBox label="QUALITY" value={analysis1m.entryQuality || 'NONE'} color={analysis1m.entryQuality === 'A+' ? '#10b981' : analysis1m.entryQuality === 'A' ? '#3b82f6' : '#666'} />
+            <StatBox label="QUALITY" value={analysis5m.entryQuality || 'NONE'} color={analysis5m.entryQuality === 'A+' ? '#10b981' : analysis5m.entryQuality === 'A' ? '#3b82f6' : '#666'} />
           </div>
           
           {/* Signal Boxes */}
-          <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: '8px' }}>
-            <SignalBox analysis={analysis1m} timeframe="1M PRIMARY" />
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px' }}>
             <SignalBox analysis={analysis5m} timeframe="5M" />
+            <SignalBox analysis={analysis15m} timeframe="15M" />
             <SignalBox analysis={refAnalysis} timeframe={refName} />
           </div>
           
-          {/* Candle Pattern Alert */}
-          {analysis1m.candlePattern?.type !== 'neutral' && analysis1m.candlePattern?.pattern !== 'none' && (
-            <div style={{ background: analysis1m.candlePattern.type === 'bullish' ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)', border: `1px solid ${analysis1m.candlePattern.type === 'bullish' ? '#10b981' : '#ef4444'}`, padding: '8px', textAlign: 'center' }}>
-              <span style={{ color: analysis1m.candlePattern.type === 'bullish' ? '#10b981' : '#ef4444', fontWeight: '700', fontSize: '12px' }}>
-                🔥 {analysis1m.candlePattern.pattern.replace(/_/g, ' ').toUpperCase()}
-              </span>
+          {/* MTF Status */}
+          {mtfConfirmed && (
+            <div style={{ background: 'rgba(16,185,129,0.15)', border: '1px solid #10b981', padding: '10px', textAlign: 'center' }}>
+              <span style={{ color: '#10b981', fontWeight: '700', fontSize: '12px' }}>✓ MTF CONFIRMED — 5M & 15M Aligned</span>
             </div>
           )}
           
-          {/* SCALP Trade Plan */}
-          {analysis1m.tradePlan && analysis1m.shouldTrade && (
-            <div style={{ background: analysis1m.tradePlan.direction === 'LONG' ? 'rgba(16,185,129,0.08)' : 'rgba(239,68,68,0.08)', border: `2px solid ${analysis1m.tradePlan.direction === 'LONG' ? '#10b981' : '#ef4444'}`, padding: '10px' }}>
-              <div style={{ fontSize: '9px', color: '#888', letterSpacing: '1px', marginBottom: '8px', display: 'flex', justifyContent: 'space-between' }}>
-                <span>SCALP PLAN — {analysis1m.tradePlan.direction}</span>
-                <span style={{ color: '#f59e0b' }}>MAX HOLD: {analysis1m.tradePlan.maxHold}</span>
+          {analysis5m.bias !== 'NEUTRAL' && analysis15m.bias !== 'NEUTRAL' && analysis5m.bias !== analysis15m.bias && (
+            <div style={{ background: 'rgba(239,68,68,0.15)', border: '1px solid #ef4444', padding: '10px', textAlign: 'center' }}>
+              <span style={{ color: '#ef4444', fontWeight: '700', fontSize: '12px' }}>⚠ TIMEFRAME CONFLICT — Wait for alignment</span>
+            </div>
+          )}
+          
+          {/* SWING TRADE PLAN */}
+          {analysis5m.tradePlan && analysis5m.shouldTrade && (
+            <div style={{ background: analysis5m.tradePlan.direction === 'LONG' ? 'rgba(16,185,129,0.08)' : 'rgba(239,68,68,0.08)', border: `2px solid ${analysis5m.tradePlan.direction === 'LONG' ? '#10b981' : '#ef4444'}`, padding: '12px' }}>
+              <div style={{ fontSize: '10px', color: '#888', letterSpacing: '1px', marginBottom: '10px', display: 'flex', justifyContent: 'space-between' }}>
+                <span>SWING TRADE — {analysis5m.tradePlan.direction}</span>
+                <span style={{ color: '#f59e0b' }}>Target: 3R - 8R+</span>
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px' }}>
                 <div>
-                  <div style={{ fontSize: '7px', color: '#666' }}>ENTRY</div>
-                  <div style={{ fontSize: '13px', color: '#fff', fontWeight: '600' }}>${analysis1m.tradePlan.entry.toFixed(symbol === 'BTCUSDT' ? 0 : 3)}</div>
+                  <div style={{ fontSize: '8px', color: '#666' }}>ENTRY</div>
+                  <div style={{ fontSize: '14px', color: '#fff', fontWeight: '600' }}>${analysis5m.tradePlan.entry.toFixed(symbol === 'BTCUSDT' ? 0 : 3)}</div>
                 </div>
                 <div>
-                  <div style={{ fontSize: '7px', color: '#666' }}>STOP</div>
-                  <div style={{ fontSize: '13px', color: '#ef4444', fontWeight: '600' }}>${analysis1m.tradePlan.stopLoss.toFixed(symbol === 'BTCUSDT' ? 0 : 3)}</div>
-                  <div style={{ fontSize: '8px', color: '#666' }}>{analysis1m.tradePlan.riskPercent}%</div>
+                  <div style={{ fontSize: '8px', color: '#666' }}>STOP LOSS</div>
+                  <div style={{ fontSize: '14px', color: '#ef4444', fontWeight: '600' }}>${analysis5m.tradePlan.stopLoss.toFixed(symbol === 'BTCUSDT' ? 0 : 3)}</div>
+                  <div style={{ fontSize: '9px', color: '#666' }}>Risk: {analysis5m.tradePlan.riskPercent}%</div>
                 </div>
                 <div>
-                  <div style={{ fontSize: '7px', color: '#666' }}>TP1 (1R)</div>
-                  <div style={{ fontSize: '11px', color: '#10b981' }}>${analysis1m.tradePlan.tp1.toFixed(symbol === 'BTCUSDT' ? 0 : 3)}</div>
-                  <div style={{ fontSize: '7px', color: '#666' }}>TP2 (1.5R)</div>
-                  <div style={{ fontSize: '11px', color: '#10b981' }}>${analysis1m.tradePlan.tp2.toFixed(symbol === 'BTCUSDT' ? 0 : 3)}</div>
+                  <div style={{ fontSize: '8px', color: '#666' }}>TARGETS</div>
+                  <div style={{ fontSize: '10px', color: '#10b981' }}>TP1 (3R): ${analysis5m.tradePlan.tp1.toFixed(symbol === 'BTCUSDT' ? 0 : 2)}</div>
+                  <div style={{ fontSize: '10px', color: '#10b981' }}>TP2 (5R): ${analysis5m.tradePlan.tp2.toFixed(symbol === 'BTCUSDT' ? 0 : 2)}</div>
+                  <div style={{ fontSize: '10px', color: '#10b981' }}>TP3 (8R): ${analysis5m.tradePlan.tp3.toFixed(symbol === 'BTCUSDT' ? 0 : 2)}</div>
                 </div>
                 <div>
-                  <div style={{ fontSize: '7px', color: '#666' }}>BREAKEVEN</div>
-                  <div style={{ fontSize: '11px', color: '#f59e0b' }}>${analysis1m.tradePlan.breakeven.toFixed(symbol === 'BTCUSDT' ? 0 : 3)}</div>
-                  <div style={{ fontSize: '8px', color: '#666' }}>Move stop after 0.5R</div>
+                  <div style={{ fontSize: '8px', color: '#666' }}>POTENTIAL (10x)</div>
+                  <div style={{ fontSize: '14px', color: '#f59e0b', fontWeight: '700' }}>{analysis5m.tradePlan.leverage.split('=')[1]}</div>
+                  <div style={{ fontSize: '8px', color: '#666', marginTop: '4px' }}>Trail after 1.5R</div>
                 </div>
               </div>
             </div>
           )}
           
-          {!analysis1m.shouldTrade && analysis1m.noTradeReason && (
-            <div style={{ background: 'rgba(245,158,11,0.1)', border: '1px solid #f59e0b', padding: '8px' }}>
-              <span style={{ color: '#f59e0b', fontWeight: '600', fontSize: '9px' }}>⏳ WAIT: </span>
-              <span style={{ color: '#888', fontSize: '9px' }}>{analysis1m.noTradeReason}</span>
+          {!analysis5m.shouldTrade && analysis5m.noTradeReason && (
+            <div style={{ background: 'rgba(100,100,100,0.1)', border: '1px solid #444', padding: '10px' }}>
+              <span style={{ color: '#888', fontWeight: '600', fontSize: '10px' }}>⏳ WAITING: </span>
+              <span style={{ color: '#666', fontSize: '10px' }}>{analysis5m.noTradeReason}</span>
+            </div>
+          )}
+          
+          {/* Consolidation Info */}
+          {analysis5m.consolidation?.inConsolidation && (
+            <div style={{ background: 'rgba(59,130,246,0.1)', border: '1px solid #3b82f6', padding: '10px' }}>
+              <div style={{ color: '#3b82f6', fontWeight: '600', fontSize: '11px', marginBottom: '6px' }}>📊 CONSOLIDATION DETECTED</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px', fontSize: '10px' }}>
+                <div><span style={{ color: '#666' }}>Resistance:</span> <span style={{ color: '#ef4444' }}>${analysis5m.consolidation.resistance.toFixed(2)}</span></div>
+                <div><span style={{ color: '#666' }}>Support:</span> <span style={{ color: '#10b981' }}>${analysis5m.consolidation.support.toFixed(2)}</span></div>
+                <div><span style={{ color: '#666' }}>Range:</span> <span style={{ color: '#fff' }}>{analysis5m.consolidation.rangeSize.toFixed(1)}%</span></div>
+              </div>
             </div>
           )}
           
           {/* Backtest */}
-          <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-            <button onClick={handleRunBacktest} style={{ background: '#3b82f6', color: '#fff', border: 'none', padding: '8px 16px', fontSize: '10px', fontWeight: '600', cursor: 'pointer', fontFamily: 'inherit' }}>BACKTEST SCALP (1M)</button>
-            <span style={{ fontSize: '8px', color: '#666' }}>Tests A/A+ setups on 500 candles</span>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <button onClick={handleRunBacktest} style={{ background: '#3b82f6', color: '#fff', border: 'none', padding: '10px 20px', fontSize: '11px', fontWeight: '600', cursor: 'pointer', fontFamily: 'inherit' }}>BACKTEST SWING (5M)</button>
+            <span style={{ fontSize: '9px', color: '#666' }}>A/A+ setups • Trailing stops • 3-8R targets</span>
           </div>
           
           {backtest && showBacktest && (
-            <div style={{ background: '#0a0a0a', border: '1px solid #1a1a1a', padding: '8px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                <div style={{ fontSize: '8px', color: '#666', letterSpacing: '1px' }}>SCALP BACKTEST — 1M</div>
-                <button onClick={() => setShowBacktest(false)} style={{ background: 'none', border: 'none', color: '#666', cursor: 'pointer', fontSize: '12px' }}>×</button>
+            <div style={{ background: '#0a0a0a', border: '1px solid #1a1a1a', padding: '10px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                <div style={{ fontSize: '9px', color: '#666', letterSpacing: '1px' }}>SWING BACKTEST</div>
+                <button onClick={() => setShowBacktest(false)} style={{ background: 'none', border: 'none', color: '#666', cursor: 'pointer', fontSize: '14px' }}>×</button>
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '4px', marginBottom: '8px' }}>
-                <div style={{ background: '#111', padding: '4px', textAlign: 'center' }}><div style={{ fontSize: '7px', color: '#666' }}>WIN%</div><div style={{ fontSize: '12px', color: parseFloat(backtest.winRate) >= 55 ? '#10b981' : parseFloat(backtest.winRate) >= 45 ? '#f59e0b' : '#ef4444' }}>{backtest.winRate}%</div></div>
-                <div style={{ background: '#111', padding: '4px', textAlign: 'center' }}><div style={{ fontSize: '7px', color: '#666' }}>TRADES</div><div style={{ fontSize: '12px', color: '#fff' }}>{backtest.totalTrades}</div></div>
-                <div style={{ background: '#111', padding: '4px', textAlign: 'center' }}><div style={{ fontSize: '7px', color: '#666' }}>P&L</div><div style={{ fontSize: '12px', color: parseFloat(backtest.totalPnL) > 0 ? '#10b981' : '#ef4444' }}>{backtest.totalPnL}%</div></div>
-                <div style={{ background: '#111', padding: '4px', textAlign: 'center' }}><div style={{ fontSize: '7px', color: '#666' }}>DD</div><div style={{ fontSize: '12px', color: '#ef4444' }}>{backtest.maxDrawdown}%</div></div>
-                <div style={{ background: '#111', padding: '4px', textAlign: 'center' }}><div style={{ fontSize: '7px', color: '#666' }}>PF</div><div style={{ fontSize: '12px', color: parseFloat(backtest.profitFactor) > 1.2 ? '#10b981' : '#ef4444' }}>{backtest.profitFactor}</div></div>
-                <div style={{ background: '#111', padding: '4px', textAlign: 'center' }}><div style={{ fontSize: '7px', color: '#666' }}>EXPECT</div><div style={{ fontSize: '12px', color: parseFloat(backtest.expectancy) > 0 ? '#10b981' : '#ef4444' }}>{backtest.expectancy}R</div></div>
-                <div style={{ background: '#111', padding: '4px', textAlign: 'center' }}><div style={{ fontSize: '7px', color: '#666' }}>AVG DUR</div><div style={{ fontSize: '12px', color: '#888' }}>{backtest.avgDuration}m</div></div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(8, 1fr)', gap: '4px', marginBottom: '10px' }}>
+                <div style={{ background: '#111', padding: '6px', textAlign: 'center' }}><div style={{ fontSize: '7px', color: '#666' }}>WIN%</div><div style={{ fontSize: '13px', color: parseFloat(backtest.winRate) >= 50 ? '#10b981' : '#ef4444' }}>{backtest.winRate}%</div></div>
+                <div style={{ background: '#111', padding: '6px', textAlign: 'center' }}><div style={{ fontSize: '7px', color: '#666' }}>TRADES</div><div style={{ fontSize: '13px', color: '#fff' }}>{backtest.totalTrades}</div></div>
+                <div style={{ background: '#111', padding: '6px', textAlign: 'center' }}><div style={{ fontSize: '7px', color: '#666' }}>BIG WINS</div><div style={{ fontSize: '13px', color: '#10b981' }}>{backtest.bigWins}</div></div>
+                <div style={{ background: '#111', padding: '6px', textAlign: 'center' }}><div style={{ fontSize: '7px', color: '#666' }}>P&L</div><div style={{ fontSize: '13px', color: parseFloat(backtest.totalPnL) > 0 ? '#10b981' : '#ef4444' }}>{backtest.totalPnL}%</div></div>
+                <div style={{ background: '#111', padding: '6px', textAlign: 'center' }}><div style={{ fontSize: '7px', color: '#666' }}>DD</div><div style={{ fontSize: '13px', color: '#ef4444' }}>{backtest.maxDrawdown}%</div></div>
+                <div style={{ background: '#111', padding: '6px', textAlign: 'center' }}><div style={{ fontSize: '7px', color: '#666' }}>PF</div><div style={{ fontSize: '13px', color: parseFloat(backtest.profitFactor) > 1.5 ? '#10b981' : '#ef4444' }}>{backtest.profitFactor}</div></div>
+                <div style={{ background: '#111', padding: '6px', textAlign: 'center' }}><div style={{ fontSize: '7px', color: '#666' }}>EXPECT</div><div style={{ fontSize: '13px', color: parseFloat(backtest.expectancy) > 0 ? '#10b981' : '#ef4444' }}>{backtest.expectancy}R</div></div>
+                <div style={{ background: '#111', padding: '6px', textAlign: 'center' }}><div style={{ fontSize: '7px', color: '#666' }}>AVG DUR</div><div style={{ fontSize: '13px', color: '#888' }}>{backtest.avgDuration}</div></div>
               </div>
-              <div style={{ maxHeight: '120px', overflow: 'auto' }}>
+              <div style={{ maxHeight: '140px', overflow: 'auto' }}>
                 {backtest.trades.map((t, i) => (
-                  <div key={i} style={{ display: 'grid', gridTemplateColumns: '40px 20px 1fr 50px 20px 50px', padding: '2px 0', borderBottom: '1px solid #1a1a1a', fontSize: '8px', alignItems: 'center' }}>
+                  <div key={i} style={{ display: 'grid', gridTemplateColumns: '40px 20px 1fr 60px 30px 50px', padding: '3px 0', borderBottom: '1px solid #1a1a1a', fontSize: '9px', alignItems: 'center' }}>
                     <span style={{ color: t.direction === 'LONG' ? '#10b981' : '#ef4444' }}>{t.direction}</span>
                     <span style={{ color: t.quality === 'A+' ? '#10b981' : '#3b82f6', fontWeight: '600' }}>{t.quality}</span>
-                    <span style={{ color: '#666' }}>${t.entry.toFixed(2)}→${t.exit.toFixed(2)}</span>
+                    <span style={{ color: '#666' }}>${t.entry.toFixed(1)}→${t.exit.toFixed(1)}</span>
                     <span style={{ color: '#666' }}>{t.reason}</span>
-                    <span style={{ color: '#888' }}>{t.duration}m</span>
-                    <span style={{ color: t.pnl > 0 ? '#10b981' : '#ef4444', textAlign: 'right' }}>{t.pnlPercent > 0 ? '+' : ''}{t.pnlPercent.toFixed(2)}R</span>
+                    <span style={{ color: '#888' }}>{t.duration}</span>
+                    <span style={{ color: t.pnl > 0 ? '#10b981' : '#ef4444', textAlign: 'right', fontWeight: t.pnlPercent >= 3 ? '700' : '400' }}>{t.pnlPercent > 0 ? '+' : ''}{t.pnlPercent.toFixed(2)}R</span>
                   </div>
                 ))}
               </div>
@@ -807,37 +941,37 @@ const AssetPage = ({ symbol, name, data1m, data5m, refData, funding, refName }) 
         </div>
         
         {/* Right Column */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-          <div style={{ background: '#0a0a0a', border: '1px solid #1a1a1a', padding: '6px' }}>
-            <div style={{ fontSize: '7px', color: '#666', letterSpacing: '1px', marginBottom: '6px' }}>SCALP INDICATORS</div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px' }}>
-              <Badge label="EMA5" value={`$${analysis1m.indicators?.ema5?.toFixed(2) || '--'}`} status={analysis1m.indicators?.ema5 > analysis1m.indicators?.ema13 ? 'bullish' : 'bearish'} />
-              <Badge label="EMA13" value={`$${analysis1m.indicators?.ema13?.toFixed(2) || '--'}`} status="neutral" />
-              <Badge label="VWAP" value={`$${analysis1m.indicators?.vwap?.toFixed(2) || '--'}`} status={analysis1m.indicators?.price > analysis1m.indicators?.vwap ? 'bullish' : 'bearish'} />
-              <Badge label="ATR" value={`$${analysis1m.indicators?.atr?.toFixed(3) || '--'}`} status="neutral" />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <div style={{ background: '#0a0a0a', border: '1px solid #1a1a1a', padding: '8px' }}>
+            <div style={{ fontSize: '8px', color: '#666', letterSpacing: '1px', marginBottom: '8px' }}>INDICATORS</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+              <Badge label="RSI" value={analysis5m.indicators?.rsi?.toFixed(0) || '--'} status={analysis5m.indicators?.rsi > 60 ? 'bullish' : analysis5m.indicators?.rsi < 40 ? 'bearish' : 'neutral'} />
+              <Badge label="MACD" value={analysis5m.indicators?.macd?.toFixed(2) || '--'} status={analysis5m.indicators?.macd > analysis5m.indicators?.macdSignal ? 'bullish' : 'bearish'} />
+              <Badge label="EMA20" value={`$${analysis5m.indicators?.ema20?.toFixed(2) || '--'}`} status={analysis5m.indicators?.price > analysis5m.indicators?.ema20 ? 'bullish' : 'bearish'} />
+              <Badge label="EMA50" value={`$${analysis5m.indicators?.ema50?.toFixed(2) || '--'}`} status={analysis5m.indicators?.price > analysis5m.indicators?.ema50 ? 'bullish' : 'bearish'} />
             </div>
           </div>
           
-          <div style={{ background: '#0a0a0a', border: '1px solid #1a1a1a', padding: '6px' }}>
-            <div style={{ fontSize: '7px', color: '#666', letterSpacing: '1px', marginBottom: '6px' }}>BREAKDOWN</div>
-            {Object.entries(analysis1m.breakdown || {}).map(([k, c]) => (
-              <div key={k} style={{ marginBottom: '4px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '7px', marginBottom: '2px' }}>
-                  <span style={{ color: '#888', textTransform: 'uppercase' }}>{k.replace('_', ' ')}</span>
-                  <span style={{ color: c.score > 0 ? '#10b981' : c.score < 0 ? '#ef4444' : '#666' }}>{c.score > 0 ? '+' : ''}{c.score}</span>
+          <div style={{ background: '#0a0a0a', border: '1px solid #1a1a1a', padding: '8px' }}>
+            <div style={{ fontSize: '8px', color: '#666', letterSpacing: '1px', marginBottom: '8px' }}>BREAKDOWN</div>
+            {Object.entries(analysis5m.breakdown || {}).map(([k, c]) => (
+              <div key={k} style={{ marginBottom: '6px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '8px', marginBottom: '2px' }}>
+                  <span style={{ color: '#888', textTransform: 'uppercase' }}>{k}</span>
+                  <span style={{ color: c.score > 0 ? '#10b981' : c.score < 0 ? '#ef4444' : '#666' }}>{c.score > 0 ? '+' : ''}{c.score}/{c.max}</span>
                 </div>
-                <div style={{ height: '3px', background: '#1a1a1a', borderRadius: '2px', overflow: 'hidden' }}>
+                <div style={{ height: '4px', background: '#1a1a1a', borderRadius: '2px', overflow: 'hidden' }}>
                   <div style={{ height: '100%', width: `${Math.min(Math.abs(c.score) / c.max * 100, 100)}%`, background: c.score > 0 ? '#10b981' : c.score < 0 ? '#ef4444' : '#444' }} />
                 </div>
               </div>
             ))}
           </div>
           
-          <div style={{ background: '#0a0a0a', border: '1px solid #1a1a1a', padding: '6px', flex: 1, overflow: 'auto' }}>
-            <div style={{ fontSize: '7px', color: '#666', letterSpacing: '1px', marginBottom: '4px' }}>LIVE SIGNALS</div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-              {(analysis1m.signals || []).slice(0, 15).map((s, i) => (
-                <div key={i} style={{ fontSize: '8px', padding: '2px 4px', background: s.type === 'bullish' ? 'rgba(16,185,129,0.1)' : s.type === 'bearish' ? 'rgba(239,68,68,0.1)' : 'rgba(100,100,100,0.1)', borderLeft: `2px solid ${s.type === 'bullish' ? '#10b981' : s.type === 'bearish' ? '#ef4444' : '#666'}`, color: s.type === 'bullish' ? '#10b981' : s.type === 'bearish' ? '#ef4444' : '#888' }}>
+          <div style={{ background: '#0a0a0a', border: '1px solid #1a1a1a', padding: '8px', flex: 1, overflow: 'auto' }}>
+            <div style={{ fontSize: '8px', color: '#666', letterSpacing: '1px', marginBottom: '6px' }}>SIGNALS</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+              {(analysis5m.signals || []).slice(0, 12).map((s, i) => (
+                <div key={i} style={{ fontSize: '9px', padding: '3px 5px', background: s.type === 'bullish' ? 'rgba(16,185,129,0.1)' : s.type === 'bearish' ? 'rgba(239,68,68,0.1)' : 'rgba(100,100,100,0.1)', borderLeft: `2px solid ${s.type === 'bullish' ? '#10b981' : s.type === 'bearish' ? '#ef4444' : '#666'}`, color: s.type === 'bullish' ? '#10b981' : s.type === 'bearish' ? '#ef4444' : '#888' }}>
                   {s.type === 'bullish' ? '▲' : s.type === 'bearish' ? '▼' : '◆'} {s.text}
                 </div>
               ))}
@@ -855,44 +989,39 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [update, setUpdate] = useState(null);
   
-  // Data states
-  const [solData1m, setSolData1m] = useState([]);
   const [solData5m, setSolData5m] = useState([]);
+  const [solData15m, setSolData15m] = useState([]);
   const [solFunding, setSolFunding] = useState(0);
   
-  const [btcData1m, setBtcData1m] = useState([]);
   const [btcData5m, setBtcData5m] = useState([]);
+  const [btcData15m, setBtcData15m] = useState([]);
   const [btcFunding, setBtcFunding] = useState(0);
   
-  const [ethData1m, setEthData1m] = useState([]);
+  const [ethData5m, setEthData5m] = useState([]);
 
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [solRes1m, solRes5m, btcRes1m, btcRes5m, ethRes1m] = await Promise.all([
-          fetch('https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&limit=500'),
-          fetch('https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=5m&limit=200'),
-          fetch('https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=500'),
-          fetch('https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=5m&limit=200'),
-          fetch('https://api.binance.com/api/v3/klines?symbol=ETHUSDT&interval=1m&limit=100')
+        const [solRes5m, solRes15m, btcRes5m, btcRes15m, ethRes5m] = await Promise.all([
+          fetch('https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=5m&limit=500'),
+          fetch('https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=15m&limit=300'),
+          fetch('https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=5m&limit=500'),
+          fetch('https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=15m&limit=300'),
+          fetch('https://api.binance.com/api/v3/klines?symbol=ETHUSDT&interval=5m&limit=200')
         ]);
         
-        const parse = (klines) => klines.map(k => ({ 
-          open: parseFloat(k[1]), high: parseFloat(k[2]), low: parseFloat(k[3]), 
-          close: parseFloat(k[4]), volume: parseFloat(k[5]) 
-        }));
+        const parse = (klines) => klines.map(k => ({ open: parseFloat(k[1]), high: parseFloat(k[2]), low: parseFloat(k[3]), close: parseFloat(k[4]), volume: parseFloat(k[5]) }));
         
-        const [solK1m, solK5m, btcK1m, btcK5m, ethK1m] = await Promise.all([
-          solRes1m.json(), solRes5m.json(), btcRes1m.json(), btcRes5m.json(), ethRes1m.json()
+        const [solK5m, solK15m, btcK5m, btcK15m, ethK5m] = await Promise.all([
+          solRes5m.json(), solRes15m.json(), btcRes5m.json(), btcRes15m.json(), ethRes5m.json()
         ]);
         
-        setSolData1m(parse(solK1m));
         setSolData5m(parse(solK5m));
-        setBtcData1m(parse(btcK1m));
+        setSolData15m(parse(solK15m));
         setBtcData5m(parse(btcK5m));
-        setEthData1m(parse(ethK1m));
+        setBtcData15m(parse(btcK15m));
+        setEthData5m(parse(ethK5m));
         
-        // Funding
         try {
           const [solF, btcF] = await Promise.all([
             fetch('https://fapi.binance.com/fapi/v1/fundingRate?symbol=SOLUSDT&limit=1'),
@@ -909,39 +1038,33 @@ export default function Dashboard() {
     };
     
     fetchData();
-    const interval = setInterval(fetchData, 2000); // 2 second refresh for scalping
+    const interval = setInterval(fetchData, 5000);
     return () => clearInterval(interval);
   }, []);
 
-  if (loading) return <div style={{ minHeight: '100vh', background: '#050505', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'monospace', color: '#10b981' }}><div>◉ LOADING SCALP DASHBOARD...</div></div>;
+  if (loading) return <div style={{ minHeight: '100vh', background: '#050505', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'monospace', color: '#10b981' }}><div>◉ LOADING SWING DASHBOARD...</div></div>;
 
   return (
-    <div style={{ minHeight: '100vh', background: '#050505', color: '#e5e5e5', fontFamily: '"IBM Plex Mono", monospace', padding: '8px' }}>
+    <div style={{ minHeight: '100vh', background: '#050505', color: '#e5e5e5', fontFamily: '"IBM Plex Mono", monospace', padding: '10px' }}>
       {/* Tab Navigation */}
-      <div style={{ display: 'flex', gap: '4px', marginBottom: '10px' }}>
-        <button onClick={() => setActiveTab('SOL')} style={{ background: activeTab === 'SOL' ? '#10b981' : '#1a1a1a', color: activeTab === 'SOL' ? '#000' : '#888', border: 'none', padding: '8px 20px', fontSize: '11px', fontWeight: '700', cursor: 'pointer', fontFamily: 'inherit', letterSpacing: '1px' }}>SOL SCALP</button>
-        <button onClick={() => setActiveTab('BTC')} style={{ background: activeTab === 'BTC' ? '#f59e0b' : '#1a1a1a', color: activeTab === 'BTC' ? '#000' : '#888', border: 'none', padding: '8px 20px', fontSize: '11px', fontWeight: '700', cursor: 'pointer', fontFamily: 'inherit', letterSpacing: '1px' }}>BTC SCALP</button>
+      <div style={{ display: 'flex', gap: '4px', marginBottom: '12px' }}>
+        <button onClick={() => setActiveTab('SOL')} style={{ background: activeTab === 'SOL' ? '#10b981' : '#1a1a1a', color: activeTab === 'SOL' ? '#000' : '#888', border: 'none', padding: '10px 24px', fontSize: '12px', fontWeight: '700', cursor: 'pointer', fontFamily: 'inherit', letterSpacing: '1px' }}>SOL SWING</button>
+        <button onClick={() => setActiveTab('BTC')} style={{ background: activeTab === 'BTC' ? '#f59e0b' : '#1a1a1a', color: activeTab === 'BTC' ? '#000' : '#888', border: 'none', padding: '10px 24px', fontSize: '12px', fontWeight: '700', cursor: 'pointer', fontFamily: 'inherit', letterSpacing: '1px' }}>BTC SWING</button>
       </div>
       
-      {/* Asset Pages */}
       {activeTab === 'SOL' && (
-        <AssetPage symbol="SOLUSDT" name="SOL" data1m={solData1m} data5m={solData5m} refData={btcData1m} funding={solFunding} refName="BTC" />
+        <AssetPage symbol="SOLUSDT" name="SOL" data5m={solData5m} data15m={solData15m} refData={btcData5m} funding={solFunding} refName="BTC" />
       )}
       {activeTab === 'BTC' && (
-        <AssetPage symbol="BTCUSDT" name="BTC" data1m={btcData1m} data5m={btcData5m} refData={ethData1m} funding={btcFunding} refName="ETH" />
+        <AssetPage symbol="BTCUSDT" name="BTC" data5m={btcData5m} data15m={btcData15m} refData={ethData5m} funding={btcFunding} refName="ETH" />
       )}
       
-      <div style={{ marginTop: '8px', display: 'flex', justifyContent: 'space-between', fontSize: '7px', color: '#444' }}>
-        <div>SCALP MODE • 1M Primary • 2s refresh • Max 15min hold • {update?.toLocaleTimeString()}</div>
+      <div style={{ marginTop: '10px', display: 'flex', justifyContent: 'space-between', fontSize: '8px', color: '#444' }}>
+        <div>SWING MODE • 5M+15M • Breakout Detection • Trailing Stops • 5s refresh • {update?.toLocaleTimeString()}</div>
         <div>NFA DYOR</div>
       </div>
       
-      <style>{`
-        @keyframes pulse {
-          0%, 100% { opacity: 1; }
-          50% { opacity: 0.5; }
-        }
-      `}</style>
+      <style>{`@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }`}</style>
     </div>
   );
 }
