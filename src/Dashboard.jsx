@@ -230,8 +230,36 @@ const analyzePriceAction = (data) => {
   return { pattern, strength, type, momentum };
 };
 
+// ============ TREND CONSISTENCY ============
+const analyzeTrendConsistency = (data, lookback = 10) => {
+  if (data.length < lookback + 5) return { bullish: 0, bearish: 0, direction: 'neutral' };
+  
+  const recent = data.slice(-lookback);
+  let bullishCandles = 0;
+  let bearishCandles = 0;
+  let higherCloses = 0;
+  let lowerCloses = 0;
+  
+  for (let i = 1; i < recent.length; i++) {
+    if (recent[i].close > recent[i].open) bullishCandles++;
+    else bearishCandles++;
+    
+    if (recent[i].close > recent[i-1].close) higherCloses++;
+    else lowerCloses++;
+  }
+  
+  const bullishPct = (bullishCandles + higherCloses) / (lookback * 2) * 100;
+  const bearishPct = (bearishCandles + lowerCloses) / (lookback * 2) * 100;
+  
+  let direction = 'neutral';
+  if (bullishPct > 60) direction = 'bullish';
+  else if (bearishPct > 60) direction = 'bearish';
+  
+  return { bullish: bullishPct, bearish: bearishPct, direction };
+};
+
 // ============ SIGNAL ANALYSIS ============
-const analyzeSignals = (data, funding = 0, refBias = 'NEUTRAL') => {
+const analyzeSignals = (data, funding = 0, refBias = 'NEUTRAL', prevBias = 'NEUTRAL') => {
   if (data.length < 50) return { bias: 'NEUTRAL', confidence: 0, signals: [], breakdown: {}, indicators: {}, tradePlan: null, score: 0 };
   
   const latest = data[data.length - 1];
@@ -249,6 +277,7 @@ const analyzeSignals = (data, funding = 0, refBias = 'NEUTRAL') => {
   const structure = analyzeStructure(data, 30);
   const volume = analyzeVolume(data, 20);
   const priceAction = analyzePriceAction(data);
+  const trendConsistency = analyzeTrendConsistency(data, 12);
   
   let bullScore = 0, bearScore = 0;
   const signals = [];
@@ -433,11 +462,40 @@ const analyzeSignals = (data, funding = 0, refBias = 'NEUTRAL') => {
   Object.values(breakdown).forEach(c => c.signals.forEach(s => signals.push(s)));
   const totalScore = bullScore - bearScore;
   
-  let bias = 'NEUTRAL'; 
-  if (totalScore >= 15) bias = 'LONG'; 
-  else if (totalScore <= -15) bias = 'SHORT';
+  // ============ BIAS WITH HYSTERESIS ============
+  // Once in a position, need stronger signal to flip
+  let bias = 'NEUTRAL';
+  
+  // Base thresholds
+  const entryThreshold = 18;  // Need this to enter
+  const exitThreshold = 25;   // Need this much opposite to flip
+  
+  if (prevBias === 'NEUTRAL') {
+    // Not in a trade - use normal thresholds
+    if (totalScore >= entryThreshold) bias = 'LONG';
+    else if (totalScore <= -entryThreshold) bias = 'SHORT';
+  } else if (prevBias === 'LONG') {
+    // Currently long - stay long unless strong short signal
+    if (totalScore >= 0) bias = 'LONG';  // Stay long if still positive
+    else if (totalScore <= -exitThreshold) bias = 'SHORT';  // Strong reversal
+    else bias = 'NEUTRAL';  // Weak - go neutral, don't flip
+  } else if (prevBias === 'SHORT') {
+    // Currently short - stay short unless strong long signal
+    if (totalScore <= 0) bias = 'SHORT';  // Stay short if still negative
+    else if (totalScore >= exitThreshold) bias = 'LONG';  // Strong reversal
+    else bias = 'NEUTRAL';  // Weak - go neutral, don't flip
+  }
+  
+  // Trend consistency filter - don't fight the recent trend
+  if (bias === 'LONG' && trendConsistency.direction === 'bearish' && trendConsistency.bearish > 65) {
+    if (totalScore < 25) bias = 'NEUTRAL';  // Need very strong signal to go against recent trend
+  }
+  if (bias === 'SHORT' && trendConsistency.direction === 'bullish' && trendConsistency.bullish > 65) {
+    if (totalScore > -25) bias = 'NEUTRAL';
+  }
   
   // ============ CONVICTION & ENTRY QUALITY ============
+  // Stricter conviction - need multiple factors aligned
   let conviction = 'LOW';
   let convictionReasons = [];
   let shouldTrade = false;
@@ -446,28 +504,48 @@ const analyzeSignals = (data, funding = 0, refBias = 'NEUTRAL') => {
     let convictionScore = 0;
     
     if (bias === 'LONG') {
-      if (structure.trend === 'uptrend') { convictionScore += 2; convictionReasons.push('Trend aligned'); }
-      if (le9 > le21 && le21 > le50) { convictionScore += 2; convictionReasons.push('EMAs stacked'); }
-      if (priceAction.type === 'bullish') { convictionScore += 2; convictionReasons.push(priceAction.pattern); }
+      // Must-have factors (each worth 2)
+      if (structure.trend === 'uptrend') { convictionScore += 2; convictionReasons.push('Uptrend'); }
+      if (le9 > le21) { convictionScore += 2; convictionReasons.push('EMA aligned'); }
+      if (trendConsistency.direction === 'bullish') { convictionScore += 2; convictionReasons.push('Consistent'); }
+      
+      // Supporting factors (each worth 1)
+      if (le21 > le50) { convictionScore += 1; convictionReasons.push('EMA stack'); }
+      if (priceAction.type === 'bullish') { convictionScore += 1; convictionReasons.push(priceAction.pattern); }
       if (volume.relative > 1.3) { convictionScore += 1; convictionReasons.push('Volume'); }
       if (refBias === 'LONG') { convictionScore += 2; convictionReasons.push('BTC aligned'); }
-      if (lRSI > 40 && lRSI < 70) { convictionScore += 1; convictionReasons.push('RSI OK'); }
-      if (lMACD > lSig) { convictionScore += 1; convictionReasons.push('MACD bullish'); }
+      if (lRSI > 40 && lRSI < 65) { convictionScore += 1; convictionReasons.push('RSI OK'); }
+      if (lMACD > lSig && lHist > pHist) { convictionScore += 1; convictionReasons.push('MACD accel'); }
       if (breakResistance) { convictionScore += 2; convictionReasons.push('Breakout'); }
+      if (latest.close > le9 && latest.low > le21) { convictionScore += 1; convictionReasons.push('Price strong'); }
     } else {
-      if (structure.trend === 'downtrend') { convictionScore += 2; convictionReasons.push('Trend aligned'); }
-      if (le9 < le21 && le21 < le50) { convictionScore += 2; convictionReasons.push('EMAs stacked'); }
-      if (priceAction.type === 'bearish') { convictionScore += 2; convictionReasons.push(priceAction.pattern); }
+      // Must-have factors
+      if (structure.trend === 'downtrend') { convictionScore += 2; convictionReasons.push('Downtrend'); }
+      if (le9 < le21) { convictionScore += 2; convictionReasons.push('EMA aligned'); }
+      if (trendConsistency.direction === 'bearish') { convictionScore += 2; convictionReasons.push('Consistent'); }
+      
+      // Supporting factors
+      if (le21 < le50) { convictionScore += 1; convictionReasons.push('EMA stack'); }
+      if (priceAction.type === 'bearish') { convictionScore += 1; convictionReasons.push(priceAction.pattern); }
       if (volume.relative > 1.3) { convictionScore += 1; convictionReasons.push('Volume'); }
       if (refBias === 'SHORT') { convictionScore += 2; convictionReasons.push('BTC aligned'); }
-      if (lRSI < 60 && lRSI > 30) { convictionScore += 1; convictionReasons.push('RSI OK'); }
-      if (lMACD < lSig) { convictionScore += 1; convictionReasons.push('MACD bearish'); }
+      if (lRSI < 60 && lRSI > 35) { convictionScore += 1; convictionReasons.push('RSI OK'); }
+      if (lMACD < lSig && lHist < pHist) { convictionScore += 1; convictionReasons.push('MACD accel'); }
       if (breakSupport) { convictionScore += 2; convictionReasons.push('Breakdown'); }
+      if (latest.close < le9 && latest.high < le21) { convictionScore += 1; convictionReasons.push('Price weak'); }
     }
     
-    if (convictionScore >= 8) { conviction = 'HIGH'; shouldTrade = true; }
-    else if (convictionScore >= 5) { conviction = 'MEDIUM'; shouldTrade = true; }
+    // Stricter thresholds - need more alignment
+    if (convictionScore >= 10) { conviction = 'HIGH'; shouldTrade = true; }
+    else if (convictionScore >= 7) { conviction = 'MEDIUM'; shouldTrade = true; }
     else { conviction = 'LOW'; }
+    
+    // Extra requirements for HIGH conviction
+    if (conviction === 'HIGH') {
+      // Must have trend consistency
+      if (bias === 'LONG' && trendConsistency.direction !== 'bullish') conviction = 'MEDIUM';
+      if (bias === 'SHORT' && trendConsistency.direction !== 'bearish') conviction = 'MEDIUM';
+    }
   }
   
   // Additional filters
@@ -522,7 +600,7 @@ const analyzeSignals = (data, funding = 0, refBias = 'NEUTRAL') => {
     bias, 
     confidence: Math.min(Math.abs(totalScore) * 2, 100).toFixed(0), 
     bullScore, bearScore, signals, breakdown, shouldTrade, noTradeReason, tradePlan, score: totalScore,
-    structure, volume, priceAction, conviction, convictionReasons,
+    structure, volume, priceAction, conviction, convictionReasons, trendConsistency,
     indicators: { rsi: lRSI, macd: lMACD, macdSignal: lSig, adx: lADX, atr: lATR, ema9: le9, ema21: le21, ema50: le50, price: latest.close } 
   };
 };
@@ -537,12 +615,18 @@ const runBacktest = (data, initialCapital = 10000) => {
   let maxCapital = initialCapital;
   let maxDrawdown = 0;
   let skippedTrades = 0;
+  let prevBias = 'NEUTRAL';
   
   for (let i = 50; i < data.length - 1; i++) {
     const slice = data.slice(0, i + 1);
-    const analysis = analyzeSignals(slice, 0, 'NEUTRAL');
+    const analysis = analyzeSignals(slice, 0, 'NEUTRAL', prevBias);
     const currentCandle = data[i];
     const nextCandle = data[i + 1];
+    
+    // Update prevBias for hysteresis
+    if (analysis.bias !== 'NEUTRAL') {
+      prevBias = analysis.bias;
+    }
     
     if (position) {
       let exitPrice = null;
@@ -555,7 +639,11 @@ const runBacktest = (data, initialCapital = 10000) => {
           position.tp1Hit = true; 
           position.stopLoss = position.entry + position.riskR * 0.3;
         }
-        else if (analysis.bias === 'SHORT' && analysis.score <= -18) { exitPrice = nextCandle.open; exitReason = 'Flip'; }
+        // Only exit on strong reversal signal
+        else if (analysis.bias === 'SHORT' && analysis.conviction !== 'LOW' && analysis.score <= -22) { 
+          exitPrice = nextCandle.open; 
+          exitReason = 'Flip'; 
+        }
       } else {
         if (nextCandle.high >= position.stopLoss) { exitPrice = position.stopLoss; exitReason = 'Stop'; }
         else if (nextCandle.low <= position.tp2) { exitPrice = position.tp2; exitReason = 'TP2'; }
@@ -563,7 +651,10 @@ const runBacktest = (data, initialCapital = 10000) => {
           position.tp1Hit = true; 
           position.stopLoss = position.entry - position.riskR * 0.3;
         }
-        else if (analysis.bias === 'LONG' && analysis.score >= 18) { exitPrice = nextCandle.open; exitReason = 'Flip'; }
+        else if (analysis.bias === 'LONG' && analysis.conviction !== 'LOW' && analysis.score >= 22) { 
+          exitPrice = nextCandle.open; 
+          exitReason = 'Flip'; 
+        }
       }
       
       if (!exitPrice && i - position.entryIndex > 50) { exitPrice = nextCandle.close; exitReason = 'Time'; }
@@ -578,13 +669,20 @@ const runBacktest = (data, initialCapital = 10000) => {
         maxDrawdown = Math.max(maxDrawdown, ((maxCapital - capital) / maxCapital) * 100);
         trades.push({ direction: position.direction, entry: position.entry, exit: exitPrice, pnl, pnlPercent: rMultiple, reason: exitReason, conviction: position.conviction });
         position = null;
+        prevBias = 'NEUTRAL'; // Reset after closing
       }
     }
     
     if (!position && analysis.tradePlan && analysis.shouldTrade) {
-      const validEntry = Math.abs(analysis.score) >= 18 && (analysis.conviction === 'HIGH' || analysis.conviction === 'MEDIUM');
+      // Stricter entry: need HIGH or strong MEDIUM conviction
+      const validEntry = Math.abs(analysis.score) >= 20 && 
+                        (analysis.conviction === 'HIGH' || (analysis.conviction === 'MEDIUM' && Math.abs(analysis.score) >= 25));
       
-      if (validEntry) {
+      // Must have trend consistency
+      const trendOK = (analysis.bias === 'LONG' && analysis.trendConsistency?.direction !== 'bearish') ||
+                      (analysis.bias === 'SHORT' && analysis.trendConsistency?.direction !== 'bullish');
+      
+      if (validEntry && trendOK) {
         const plan = analysis.tradePlan;
         const riskPerTrade = capital * 0.01;
         const stopDistance = Math.abs(currentCandle.close - plan.stopLoss);
@@ -678,10 +776,27 @@ const SignalBox = ({ analysis, timeframe, large = false }) => (
 const AssetPage = ({ symbol, name, data5m, data1m, refData, funding, refName }) => {
   const [backtest, setBacktest] = useState(null);
   const [showBacktest, setShowBacktest] = useState(false);
+  const [prevBias5m, setPrevBias5m] = useState('NEUTRAL');
+  const [prevBias1m, setPrevBias1m] = useState('NEUTRAL');
   
-  const refAnalysis = useMemo(() => analyzeSignals(refData, 0, 'NEUTRAL'), [refData]);
-  const analysis5m = useMemo(() => analyzeSignals(data5m, funding, refAnalysis.bias), [data5m, funding, refAnalysis.bias]);
-  const analysis1m = useMemo(() => analyzeSignals(data1m, funding, refAnalysis.bias), [data1m, funding, refAnalysis.bias]);
+  const refAnalysis = useMemo(() => analyzeSignals(refData, 0, 'NEUTRAL', 'NEUTRAL'), [refData]);
+  const analysis5m = useMemo(() => {
+    const result = analyzeSignals(data5m, funding, refAnalysis.bias, prevBias5m);
+    return result;
+  }, [data5m, funding, refAnalysis.bias, prevBias5m]);
+  const analysis1m = useMemo(() => {
+    const result = analyzeSignals(data1m, funding, refAnalysis.bias, prevBias1m);
+    return result;
+  }, [data1m, funding, refAnalysis.bias, prevBias1m]);
+  
+  // Update previous bias when it changes (with delay to prevent rapid flipping)
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (analysis5m.bias !== prevBias5m) setPrevBias5m(analysis5m.bias);
+      if (analysis1m.bias !== prevBias1m) setPrevBias1m(analysis1m.bias);
+    }, 5000); // 5 second delay before accepting new bias
+    return () => clearTimeout(timer);
+  }, [analysis5m.bias, analysis1m.bias, prevBias5m, prevBias1m]);
   
   const mtfAligned = analysis5m.bias !== 'NEUTRAL' && analysis1m.bias === analysis5m.bias;
   const highConviction = analysis5m.conviction === 'HIGH' && analysis5m.shouldTrade;
@@ -774,8 +889,9 @@ const AssetPage = ({ symbol, name, data5m, data1m, refData, funding, refName }) 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
           
           {/* Key Stats */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: '8px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '8px' }}>
             <StatBox label="TREND" value={analysis5m.structure?.trend?.toUpperCase().slice(0,5) || 'RANGE'} color={analysis5m.structure?.trend === 'uptrend' ? '#10b981' : analysis5m.structure?.trend === 'downtrend' ? '#ef4444' : '#666'} />
+            <StatBox label="CONSISTENCY" value={analysis5m.trendConsistency?.direction?.toUpperCase().slice(0,4) || 'NEUT'} color={analysis5m.trendConsistency?.direction === 'bullish' ? '#10b981' : analysis5m.trendConsistency?.direction === 'bearish' ? '#ef4444' : '#666'} sub={`${Math.max(analysis5m.trendConsistency?.bullish || 0, analysis5m.trendConsistency?.bearish || 0).toFixed(0)}%`} />
             <StatBox label="RSI" value={analysis5m.indicators?.rsi?.toFixed(0) || '--'} color={analysis5m.indicators?.rsi > 70 ? '#ef4444' : analysis5m.indicators?.rsi < 30 ? '#10b981' : '#888'} />
             <StatBox label="ADX" value={analysis5m.indicators?.adx?.toFixed(0) || '--'} color={analysis5m.indicators?.adx > 25 ? '#10b981' : '#666'} />
             <StatBox label="VOL" value={`${analysis5m.volume?.relative?.toFixed(1) || '1.0'}x`} color={analysis5m.volume?.spike ? '#10b981' : '#888'} />
@@ -1017,7 +1133,7 @@ export default function Dashboard() {
     };
     
     fetchData();
-    const interval = setInterval(fetchData, 3000);
+    const interval = setInterval(fetchData, 5000);
     return () => clearInterval(interval);
   }, []);
 
@@ -1038,7 +1154,7 @@ export default function Dashboard() {
       )}
       
       <div style={{ marginTop: '12px', display: 'flex', justifyContent: 'space-between', fontSize: '8px', color: '#333' }}>
-        <div>Chart Analysis • 1M + 5M • 3s refresh • {update?.toLocaleTimeString()}</div>
+        <div>Chart Analysis • Hysteresis Active • Trend Consistency Filter • {update?.toLocaleTimeString()}</div>
         <div>NFA DYOR</div>
       </div>
     </div>
